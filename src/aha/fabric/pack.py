@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from pydantic_ai.capabilities import AgentCapability
@@ -49,7 +50,16 @@ class Pack(Protocol):
         ...
 
     def capabilities(self, spec: TaskSpec) -> list[AgentCapability[None]]:
-        """Domain tools. The fabric adds filesystem, shell, and the safety rails."""
+        """Domain tools, carrying `instructions()` on the capability that owns them.
+
+        Guidance travels with the tools it governs rather than through the
+        agent's system prompt, so a pack is one self-contained unit and the
+        fabric never has to know what it says.
+        """
+        ...
+
+    def skills(self) -> Path | None:
+        """A directory of portable `SKILL.md` packages, loaded on demand."""
         ...
 
     def verify(self, spec: TaskSpec) -> Verification:

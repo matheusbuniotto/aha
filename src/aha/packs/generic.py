@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic_ai.capabilities import AgentCapability
+from pydantic_ai.capabilities import AgentCapability, Capability
 
 from ..fabric.pack import Pack, TaskKind, Verification, register
 from ..fabric.spec import Policy, Risk, TaskSpec
@@ -68,7 +68,11 @@ class GenericPack:
         )
 
     def capabilities(self, spec: TaskSpec) -> list[AgentCapability[None]]:
-        return []
+        """No domain tools -- only house style, which still travels as a capability."""
+        return [Capability(id='generic', instructions=self.instructions(spec))]
+
+    def skills(self) -> Path | None:
+        return None
 
     def verify(self, spec: TaskSpec) -> Verification:
         """Run `context['verify_command']` if one was supplied; otherwise trust nothing."""

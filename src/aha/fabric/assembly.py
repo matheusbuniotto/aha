@@ -17,6 +17,7 @@ from pydantic_ai_harness import (
     FileSystem,
     Planning,
     Shell,
+    Skills,
     StepPersistence,
     SummarizingCompaction,
     TieredCompaction,
@@ -27,6 +28,7 @@ from pydantic_ai_harness.step_persistence import SqliteStepStore
 from .approvals import Approver, approval_gate
 from .journal import Journal
 from .pack import Pack
+from .recorder import Recorder
 from .spec import TaskSpec
 
 PREAMBLE = """\
@@ -66,6 +68,25 @@ def workspace_capabilities(spec: TaskSpec) -> list[AgentCapability[None]]:
     return capabilities
 
 
+def skill_capabilities(spec: TaskSpec, pack: Pack) -> list[AgentCapability[None]]:
+    """Portable `SKILL.md` libraries: the pack's own, then the team's.
+
+    Skills are deferred, so the model sees a one-line catalogue and pulls in the
+    detail only when a task turns out to need it. A team encodes its house
+    conventions by dropping a file in `context['skills_dir']` -- no Python.
+    """
+    directories = [path for path in (pack.skills(), _team_skills(spec)) if path is not None]
+    return [Skills(directories)] if directories else []
+
+
+def _team_skills(spec: TaskSpec) -> Path | None:
+    configured = spec.context.get('skills_dir')
+    if not configured:
+        return None
+    path = (spec.resolved_workspace / configured).resolve()
+    return path if path.is_dir() else None
+
+
 def context_capabilities() -> list[AgentCapability[None]]:
     """Keeping a long run inside the context window without losing the thread."""
     return [
@@ -100,7 +121,9 @@ def build_agent(
     capabilities: list[AgentCapability[None]] = [
         *workspace_capabilities(spec),
         *pack.capabilities(spec),
+        *skill_capabilities(spec, pack),
         *context_capabilities(),
+        Recorder(journal=journal),
         approval_gate(
             policy=spec.policy,
             autonomy=spec.autonomy,
@@ -121,7 +144,7 @@ def build_agent(
         spec.model,
         name=spec.name,
         defer_model_check=True,
-        instructions=f'{PREAMBLE}\n{pack.instructions(spec)}',
+        instructions=PREAMBLE,
         capabilities=capabilities,
     )
 

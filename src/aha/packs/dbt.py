@@ -19,6 +19,7 @@ from ..fabric.pack import Pack, TaskKind, Verification, register
 from ..fabric.spec import Policy, Risk, TaskSpec
 
 MAX_OUTPUT_CHARS = 20_000
+SKILLS_DIR = Path(__file__).parent / 'skills' / 'dbt'
 
 KINDS = (
     TaskKind(
@@ -189,9 +190,13 @@ class DbtPack:
             Capability(
                 id='dbt',
                 description='Build, test, and inspect a dbt project.',
+                instructions=self.instructions(spec),
                 tools=[dbt_ls, dbt_parse, dbt_compile, dbt_build, dbt_test, dbt_seed, query_sql],
             )
         ]
+
+    def skills(self) -> Path | None:
+        return SKILLS_DIR if SKILLS_DIR.is_dir() else None
 
     def verify(self, spec: TaskSpec) -> Verification:
         """The project must parse and its models must build and pass their tests."""

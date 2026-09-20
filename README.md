@@ -50,10 +50,10 @@ what dbt is.
 
 ### Packs (`aha.packs`)
 
-A pack is a domain plugged into the fabric. It supplies four things and nothing
-else: the task kinds it answers to, its default blast radius, its house style,
-and an independent check that the work is done. `dbt` is the first; `generic` is
-the smallest worked example.
+A pack is a domain plugged into the fabric. It supplies the task kinds it answers
+to, its default blast radius, its house style, its tools, an optional skill
+library, and an independent check that the work is done. `dbt` is the first;
+`generic` is the smallest worked example.
 
 ```python
 class Pack(Protocol):
@@ -62,7 +62,36 @@ class Pack(Protocol):
     def policy(self) -> Policy: ...
     def instructions(self, spec: TaskSpec) -> str: ...
     def capabilities(self, spec: TaskSpec) -> list[AgentCapability[None]]: ...
+    def skills(self) -> Path | None: ...
     def verify(self, spec: TaskSpec) -> Verification: ...
+```
+
+A pack's instructions ride on the capability that owns its tools, so guidance
+and the tools it governs travel together and the fabric never has to know what
+either says.
+
+### Skills
+
+Deep dbt know-how lives in portable [Agent Skill](https://pydantic.dev/docs/ai/harness/skills/)
+packages under `src/aha/packs/skills/dbt/`, loaded on demand rather than held in
+context every run:
+
+| Skill | Fires when |
+|---|---|
+| `grain-and-joins` | duplicate rows, inflated aggregates, a fanning join |
+| `test-design` | adding tests, a noisy test, generic vs singular, severity |
+| `incremental-models` | a slow table, `unique_key` choice, late-arriving rows |
+| `debugging-failures` | a compilation error, a database error, a failing test |
+
+Two selection mechanisms work together. Classification picks the *primary*
+instruction and the risk posture deterministically before the run starts; skills
+cover the long tail, and the model pulls one in when a task turns out to need it.
+
+A team adds its own house conventions by dropping a `SKILL.md` into a directory
+and naming it, without writing Python:
+
+```python
+TaskSpec(..., context={'skills_dir': '.agents/skills'})
 ```
 
 ## Safe execution
@@ -96,7 +125,10 @@ system prompt.
   `Pack.verify` runs real code -- for dbt, `dbt build` -- and that verdict decides
   `RunOutcome.ok`. There is a test asserting a confident lie still fails.
 - **A durable record.** Every classification, approval, refusal, and verdict
-  lands in SQLite and is queryable with `aha runs`.
+  lands in SQLite and is queryable with `aha runs`. A `Recorder` capability
+  listens to the run's event stream as well, so the trail covers tool calls the
+  approval gate was never asked to rule on -- reads, planning, compaction -- and
+  not just the ones it gated.
 
 ## Classification
 
