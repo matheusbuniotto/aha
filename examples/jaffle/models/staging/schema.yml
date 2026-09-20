@@ -1,0 +1,9 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: One row per customer, cleaned from the raw seed.
+    columns:
+      - name: customer_id
+        description: Primary key.
+        tests: [unique, not_null]

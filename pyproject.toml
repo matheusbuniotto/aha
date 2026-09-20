@@ -1,0 +1,39 @@
+[project]
+name = "aha"
+version = "0.1.0"
+description = "An agent fabric for supervised data and analytics engineering tasks"
+readme = "README.md"
+authors = [
+    { name = "Matheus Buniotto", email = "matheus.buniotto@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic-ai>=2.46.0",
+    "pydantic-ai-harness>=0.32.0",
+    "typer>=0.27.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.16,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dbt = [
+    "dbt-core>=1.12.5",
+    "dbt-duckdb>=1.11.0",
+    "duckdb>=1.5.5",
+]
+dev = [
+    "anyio>=4.15.1",
+    "pytest>=9.1.1",
+]
+
+[project.scripts]
+aha = "aha.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
+filterwarnings = [
+    # The scripted test model has no pricing data; the ceiling is still asserted in policy tests.
+    'ignore::pydantic_ai.usage.CostNotFoundWarning',
+]

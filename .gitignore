@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# dbt artefacts and local state
+*.duckdb
+target/
+logs/
+.user.yml
+dbt_packages/
+
+# aha run state
+.aha/
