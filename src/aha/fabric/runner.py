@@ -69,16 +69,16 @@ class LocalRunner:
         )
 
         approver = self.approver or default_approver(spec.autonomy)
-        agent = build_agent(
-            spec,
-            pack,
-            approver=approver,
-            journal=journal,
-            steps_db=self.journal_path.with_name('steps.db'),
-        )
 
         status, output, usd = 'succeeded', '', 0.0
         try:
+            agent = build_agent(
+                spec,
+                pack,
+                approver=approver,
+                journal=journal,
+                steps_db=self.journal_path.with_name('steps.db'),
+            )
             with agent.override(model=self.model_override) if self.model_override else _nothing():
                 result = await agent.run(spec.goal, usage_limits=usage_limits(spec))
             output = str(result.output)

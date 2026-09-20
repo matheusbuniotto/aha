@@ -23,14 +23,46 @@ uv sync --group dbt
 
 ```bash
 uv run aha packs                              # what the agent knows how to be asked for
+uv run aha doctor                             # model routing and provider credentials
 uv run aha classify "why is revenue wrong?"   # how a request would be routed, for free
 uv run aha run "add a staging model for raw orders with tests" \
     --workspace examples/jaffle --pack dbt --autonomy supervised
 uv run aha runs                               # the audit trail
 ```
 
-Set `ANTHROPIC_API_KEY` to run against a real model. The test suite runs offline
-against a scripted model, so the whole path is exercised without a provider.
+The test suite runs offline against a scripted model, so the whole path is
+exercised without a provider.
+
+## Models
+
+Any provider Pydantic AI knows works as-is (`anthropic:...`, `openai:...`,
+`bedrock:...`). Two prefixes route to OpenAI-compatible endpoints it cannot
+infer:
+
+| Model name | Endpoint | Credentials |
+|---|---|---|
+| `opencode-go/<id>` | `https://opencode.ai/zen/go/v1` | `OPENCODE_API_KEY` |
+| `openai-compatible/<id>` | `$AHA_OPENAI_BASE_URL` | `AHA_OPENAI_API_KEY` |
+
+[opencode Go](https://opencode.ai/docs/go/) is a flat-rate subscription over 30+
+open coding models -- a cheap way to run the unattended tail without metering
+every task against a frontier provider. The generic prefix covers anything else
+that speaks chat-completions: a self-hosted vLLM, a LiteLLM router, a Bedrock
+gateway.
+
+```bash
+export OPENCODE_API_KEY=...
+uv run aha doctor -m opencode-go/kimi-k3       # how it routes, what is missing
+uv run aha run "..." -m opencode-go/kimi-k3
+
+export AHA_OPENAI_BASE_URL=http://localhost:4000/v1
+export AHA_OPENAI_API_KEY=...
+uv run aha run "..." -m openai-compatible/llama-3.3-70b
+```
+
+Unknown names pass through as strings, so an agent still assembles and is
+inspectable with no credentials present. A missing key names the variable to
+set and lands as a failed run in the journal rather than a traceback.
 
 ## How it fits together
 

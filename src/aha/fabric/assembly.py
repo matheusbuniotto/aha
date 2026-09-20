@@ -27,6 +27,7 @@ from pydantic_ai_harness.step_persistence import SqliteStepStore
 
 from .approvals import Approver, approval_gate
 from .journal import Journal
+from .models import resolve as resolve_model
 from .pack import Pack
 from .recorder import Recorder
 from .spec import TaskSpec
@@ -141,7 +142,7 @@ def build_agent(
             )
         )
     return Agent(
-        spec.model,
+        resolve_model(spec.model),
         name=spec.name,
         defer_model_check=True,
         instructions=PREAMBLE,

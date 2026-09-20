@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -15,6 +16,7 @@ from rich.table import Table
 from . import packs  # noqa: F401 - registers the built-in packs
 from .fabric import Autonomy, LocalRunner, TaskSpec, get, names
 from .fabric.classify import classify
+from .fabric.models import ENDPOINTS, describe
 from .fabric.runner import DEFAULT_JOURNAL
 
 app = typer.Typer(add_completion=False, help='Run supervised agent tasks over a workspace.')
@@ -27,7 +29,10 @@ def run(
     workspace: Annotated[Path, typer.Option('--workspace', '-w', help='Directory the agent is confined to.')] = Path('.'),
     pack: Annotated[str, typer.Option('--pack', '-p', help='Domain pack to use.')] = 'dbt',
     autonomy: Annotated[Autonomy, typer.Option('--autonomy', '-a', help='How much runs without a human.')] = Autonomy.supervised,
-    model: Annotated[str, typer.Option('--model', '-m')] = 'anthropic:claude-sonnet-4-6',
+    model: Annotated[
+        str,
+        typer.Option('--model', '-m', help='Provider model, or opencode-go/<id>, or openai-compatible/<id>.'),
+    ] = 'anthropic:claude-sonnet-4-6',
     name: Annotated[str, typer.Option('--name', help='Slug recorded in the journal.')] = 'task',
     journal: Annotated[Path, typer.Option('--journal', help='Where the audit trail is kept.')] = DEFAULT_JOURNAL,
     max_usd: Annotated[float, typer.Option('--max-usd', help='Hard spend ceiling for this run.')] = 2.0,
@@ -71,6 +76,28 @@ def classify_goal(
     verdict = classify(goal, get(pack).kinds())
     flag = ' [yellow](uncertain)[/]' if verdict.uncertain else ''
     console.print(f'{verdict.kind} · {verdict.confidence:.2f} via {verdict.source}{flag}')
+
+
+@app.command('doctor')
+def doctor(
+    model: Annotated[str, typer.Option('--model', '-m')] = 'anthropic:claude-sonnet-4-6',
+) -> None:
+    """Show how a model name routes and which provider credentials are present."""
+    console.print(f'[bold]model[/]  {describe(model)}\n')
+
+    table = Table(box=None, pad_edge=False, title='OpenAI-compatible endpoints', title_justify='left')
+    for column in ('prefix', 'base url', 'api key env', 'status'):
+        table.add_column(column)
+    for endpoint in ENDPOINTS:
+        base = endpoint.base_url or f'${endpoint.base_url_env}'
+        ready = os.getenv(endpoint.api_key_env) is not None
+        if endpoint.base_url is None:
+            ready = ready and os.getenv(endpoint.base_url_env or '') is not None
+        status = '[green]ready[/]' if ready else '[yellow]not configured[/]'
+        table.add_row(f'{endpoint.prefix}*', base, endpoint.api_key_env, status)
+    console.print(table)
+
+    console.print('\n[dim]example[/] aha run "..." -m opencode-go/kimi-k3')
 
 
 @app.command('runs')
