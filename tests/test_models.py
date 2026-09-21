@@ -96,9 +96,7 @@ async def test_a_misconfigured_model_fails_the_run_instead_of_crashing(
     assert OPENCODE_API_KEY_ENV in outcome.output
     errors = [
         payload
-        for _, kind, payload in Journal(
-            path=tmp_path / 'journal.db', run_id=outcome.run_id
-        ).events()
+        for _, kind, payload in Journal(path=tmp_path / 'journal.db', run_id=outcome.run_id).events()
         if kind == 'run_error'
     ]
     assert errors, 'the failure should be recorded'

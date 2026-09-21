@@ -21,10 +21,7 @@ MAX_DESCRIPTION_CHARS = 1024
 def loaded() -> dict[str, str]:
     directory = get('dbt').skills()
     assert directory is not None, 'the dbt pack should ship a skill library'
-    return {
-        capability.id: capability.description or ''
-        for capability in Skills(directory)._deferred_capabilities
-    }
+    return {capability.id: capability.description or '' for capability in Skills(directory)._deferred_capabilities}
 
 
 def test_the_expected_skills_load(loaded: dict[str, str]) -> None:

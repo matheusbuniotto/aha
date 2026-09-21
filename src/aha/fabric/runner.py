@@ -83,7 +83,7 @@ class LocalRunner:
                 result = await agent.run(spec.goal, usage_limits=usage_limits(spec))
             output = str(result.output)
             usd = _cost_of(result)
-        except Exception as exc:  # noqa: BLE001 - the outcome records the failure
+        except Exception as exc:
             status, output = 'failed', f'{type(exc).__name__}: {exc}'
             journal.record('run_error', error=output)
 
@@ -114,13 +114,13 @@ def _cost_of(result: Any) -> float:
     """Best-effort cost extraction; usage accounting differs per provider."""
     try:
         usage = result.usage()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 0.0
     for attr in ('cost', 'total_cost'):
         value = getattr(usage, attr, None)
         if value is not None:
             try:
                 return float(value() if callable(value) else value)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
     return 0.0

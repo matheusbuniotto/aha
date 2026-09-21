@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pydantic_ai.capabilities import AgentCapability, Capability
 
-from ..fabric.pack import Pack, TaskKind, Verification, register
+from ..fabric.pack import TaskKind, Verification, register
 from ..fabric.spec import Policy, Risk, TaskSpec
 
 KINDS = (
@@ -79,7 +79,7 @@ class GenericPack:
         command = spec.context.get('verify_command')
         if not command:
             return Verification(passed=True, detail='no verify_command configured')
-        done = subprocess.run(  # noqa: S603 - operator-supplied, not model-supplied
+        done = subprocess.run(
             shlex.split(command),
             capture_output=True,
             text=True,

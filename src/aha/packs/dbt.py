@@ -10,12 +10,13 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic_ai.capabilities import AgentCapability, Capability
 
-from ..fabric.pack import Pack, TaskKind, Verification, register
+from ..fabric.pack import TaskKind, Verification, register
 from ..fabric.spec import Policy, Risk, TaskSpec
 
 MAX_OUTPUT_CHARS = 20_000
@@ -35,14 +36,44 @@ KINDS = (
     TaskKind(
         name='bug_fix',
         description='A model is failing, wrong, or broken. Diagnose the error and repair the SQL.',
-        hints=('fix', 'bug', 'broken', 'failing', 'fails', 'error', 'wrong', 'debug', 'repair',
-               'duplicate', 'duplicates', 'missing', 'mismatch', 'incorrect', 'unexpected'),
+        hints=(
+            'fix',
+            'bug',
+            'broken',
+            'failing',
+            'fails',
+            'error',
+            'wrong',
+            'debug',
+            'repair',
+            'duplicate',
+            'duplicates',
+            'missing',
+            'mismatch',
+            'incorrect',
+            'unexpected',
+        ),
     ),
     TaskKind(
         name='analysis',
         description='Answer a question about the data by querying tables and summarising numbers. No model changes.',
-        hints=('how', 'many', 'much', 'question', 'analyse', 'analyze', 'report', 'explain',
-               'count', 'average', 'trend', 'why', 'compare', 'top', 'distribution'),
+        hints=(
+            'how',
+            'many',
+            'much',
+            'question',
+            'analyse',
+            'analyze',
+            'report',
+            'explain',
+            'count',
+            'average',
+            'trend',
+            'why',
+            'compare',
+            'top',
+            'distribution',
+        ),
     ),
     TaskKind(
         name='documentation',
@@ -116,7 +147,7 @@ def _dbt(project: Path, *args: str, timeout: float = 600.0) -> str:
     argv = [executable] if executable else [sys.executable, '-m', 'dbt.cli.main']
     argv += [*args, '--project-dir', str(project), '--profiles-dir', str(project)]
     try:
-        done = subprocess.run(  # noqa: S603 - argv is fixed, never shell
+        done = subprocess.run(
             argv,
             capture_output=True,
             text=True,
@@ -231,13 +262,11 @@ def _query_duckdb(project: Path, sql: str, limit: int) -> str:
         connection = duckdb.connect(str(candidates[0]), read_only=True)
         rows = connection.sql(f'SELECT * FROM ({sql}) LIMIT {int(limit)}')
         return _clip(str(rows))
-    except Exception as exc:  # noqa: BLE001 - surfaced to the model as a tool result
+    except Exception as exc:
         return f'query failed: {type(exc).__name__}: {exc}'
     finally:
-        try:
+        with suppress(Exception):
             connection.close()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 register(DbtPack())

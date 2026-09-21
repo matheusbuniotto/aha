@@ -74,6 +74,7 @@ def spec_for(project: Path, autonomy: Autonomy) -> TaskSpec:
     )
 
 
+@pytest.mark.slow
 @pytest.mark.anyio
 async def test_supervised_run_builds_and_verifies(project: Path, tmp_path: Path) -> None:
     runner = LocalRunner(
@@ -97,6 +98,7 @@ async def test_supervised_run_builds_and_verifies(project: Path, tmp_path: Path)
     assert 'verified' in kinds
 
 
+@pytest.mark.slow
 @pytest.mark.anyio
 async def test_unattended_run_refuses_warehouse_writes(project: Path, tmp_path: Path) -> None:
     """With nobody watching, a high-risk call is blocked rather than guessed at."""
@@ -115,6 +117,7 @@ async def test_unattended_run_refuses_warehouse_writes(project: Path, tmp_path: 
     assert 'write_file' in allowed, 'routine workspace edits should not need a person'
 
 
+@pytest.mark.slow
 @pytest.mark.anyio
 async def test_preauthorized_tools_run_unattended(project: Path, tmp_path: Path) -> None:
     """Delegation is granted by naming the tools in advance, not by removing the gate."""

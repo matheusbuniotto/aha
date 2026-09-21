@@ -95,6 +95,7 @@ library, and an independent check that the work is done. `dbt` is the first;
 ```python
 class Pack(Protocol):
     name: str
+
     def kinds(self) -> tuple[TaskKind, ...]: ...
     def policy(self) -> Policy: ...
     def instructions(self, spec: TaskSpec) -> str: ...
@@ -189,10 +190,33 @@ journal is the audit trail a supervisor reads afterwards.
 Still to build: a queue-driven `RemoteRunner`, a container image, and moving the
 journal and step store off local SQLite.
 
+## Make
+
+`make` lists everything. The ones worth knowing:
+
+```bash
+make install          # every dependency group
+make demo             # unattended run on a throwaway copy of examples/jaffle
+make demo-supervised  # the same run, approving each risky call yourself
+make runs             # what the last demo did
+make journal          # that run broken down by event kind
+make check            # lint and test, what CI would run
+make test-unit        # the fast loop, skipping anything that shells out to dbt
+make doctor           # model routing and provider credentials
+make skills           # the dbt skills and when each fires
+```
+
+`demo` takes a `GOAL`, so trying a new kind of task is one line:
+
+```bash
+make demo GOAL="add accepted_values tests to the status column"
+```
+
 ## Tests
 
 ```bash
-uv run --group dbt --group dev pytest
+make test         # everything, including the dbt end-to-end runs
+make test-unit    # fast: no dbt, no warehouse
 ```
 
 The end-to-end tests drive a scripted model, so they are deterministic and need

@@ -31,9 +31,13 @@ console = Console()
 @app.command()
 def run(
     goal: Annotated[str, typer.Argument(help='What you want done, in plain language.')],
-    workspace: Annotated[Path, typer.Option('--workspace', '-w', help='Directory the agent is confined to.')] = Path('.'),
+    workspace: Annotated[Path, typer.Option('--workspace', '-w', help='Directory the agent is confined to.')] = Path(
+        '.'
+    ),
     pack: Annotated[str, typer.Option('--pack', '-p', help='Domain pack to use.')] = 'dbt',
-    autonomy: Annotated[Autonomy, typer.Option('--autonomy', '-a', help='How much runs without a human.')] = Autonomy.supervised,
+    autonomy: Annotated[
+        Autonomy, typer.Option('--autonomy', '-a', help='How much runs without a human.')
+    ] = Autonomy.supervised,
     model: Annotated[
         str,
         typer.Option('--model', '-m', help='Provider model, or opencode-go/<id>, or openai-compatible/<id>.'),
@@ -124,8 +128,7 @@ def list_runs(
         return
     with closing(sqlite3.connect(journal)) as db:
         rows = db.execute(
-            'SELECT id, task, pack, kind, autonomy, status, usd, started_at'
-            ' FROM runs ORDER BY started_at DESC LIMIT ?',
+            'SELECT id, task, pack, kind, autonomy, status, usd, started_at FROM runs ORDER BY started_at DESC LIMIT ?',
             (limit,),
         ).fetchall()
 

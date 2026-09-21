@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.scripted import Script, call
 
 from aha.fabric import AlwaysApprove, Autonomy, LocalRunner, TaskSpec, get
 from aha.fabric.journal import Journal
-from tests.scripted import Script, call
 
 
 @pytest.mark.anyio

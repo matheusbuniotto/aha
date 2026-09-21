@@ -4,7 +4,7 @@ from .approvals import AlwaysApprove, Approver, DenyUnattended, PreAuthorized, T
 from .classify import Classification, classify
 from .journal import Journal
 from .pack import Pack, TaskKind, Verification, get, names, register
-from .runner import LocalRunner, RunOutcome, Runner
+from .runner import LocalRunner, Runner, RunOutcome
 from .spec import Autonomy, Policy, Risk, TaskSpec
 
 __all__ = [

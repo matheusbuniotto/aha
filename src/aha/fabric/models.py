@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 
 from openai import AsyncOpenAI
@@ -63,14 +63,10 @@ class Endpoint:
     def resolve(self, model_name: str, *, session_id: str) -> Model:
         base_url = self.base_url or os.getenv(self.base_url_env or '')
         if not base_url:
-            raise ModelConfigurationError(
-                f'{self.prefix}* needs a base URL. Set {self.base_url_env}.'
-            )
+            raise ModelConfigurationError(f'{self.prefix}* needs a base URL. Set {self.base_url_env}.')
         api_key = os.getenv(self.api_key_env)
         if not api_key:
-            raise ModelConfigurationError(
-                f'{self.prefix}{model_name} needs an API key. Set {self.api_key_env}.'
-            )
+            raise ModelConfigurationError(f'{self.prefix}{model_name} needs an API key. Set {self.api_key_env}.')
         headers = self.headers(session_id)
         if headers is None:
             provider = OpenAIProvider(base_url=base_url, api_key=api_key)

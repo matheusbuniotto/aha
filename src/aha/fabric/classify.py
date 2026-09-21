@@ -32,9 +32,8 @@ def classify(goal: str, kinds: tuple[TaskKind, ...]) -> Classification:
     """Pick the task kind. Tries Jev, falls back to rules, never raises."""
     if not kinds:
         return Classification(kind=UNCLASSIFIED, confidence=0.0, source='default')
-    if os.getenv('TYPESAFE_API_KEY'):
-        if found := _classify_with_jev(goal, kinds):
-            return found
+    if os.getenv('TYPESAFE_API_KEY') and (found := _classify_with_jev(goal, kinds)):
+        return found
     return _classify_with_rules(goal, kinds)
 
 
@@ -51,10 +50,7 @@ def _classify_with_jev(goal: str, kinds: tuple[TaskKind, ...]) -> Classification
                 state={'request': goal},
                 questions={
                     'kind': Choice(
-                        instructions=(
-                            'A data engineer asked for this work in `request`. '
-                            'Which kind of task is it?'
-                        ),
+                        instructions=('A data engineer asked for this work in `request`. Which kind of task is it?'),
                         criteria={k.name: k.description for k in kinds},
                     )
                 },
@@ -62,7 +58,7 @@ def _classify_with_jev(goal: str, kinds: tuple[TaskKind, ...]) -> Classification
         answer = response.choices['kind']
         confidence = float(getattr(answer, 'probability', None) or 0.75)
         return Classification(kind=answer.choice, confidence=confidence, source='jev')
-    except Exception:  # noqa: BLE001 - classification must never break a run
+    except Exception:
         return None
 
 

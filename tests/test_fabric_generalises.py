@@ -10,9 +10,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.scripted import Script, call
 
 from aha.fabric import AlwaysApprove, Autonomy, LocalRunner, TaskSpec, get
-from tests.scripted import Script, call
 
 SCRIPT_BODY = "print('hello from the fabric')\n"
 
