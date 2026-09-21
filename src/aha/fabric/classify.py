@@ -27,6 +27,9 @@ class Classification:
     def uncertain(self) -> bool:
         return self.confidence < 0.65
 
+    def __str__(self) -> str:
+        return f'{self.kind} ({self.confidence:.2f} via {self.source})'
+
 
 def classify(goal: str, kinds: tuple[TaskKind, ...]) -> Classification:
     """Pick the task kind. Tries Jev, falls back to rules, never raises."""

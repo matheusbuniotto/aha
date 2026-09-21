@@ -10,9 +10,10 @@ protected so the agent cannot rewrite its own history.
 from __future__ import annotations
 
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from .cmd import git
 
 PREFIX = 'aha/'
 UNSAFE = re.compile(r'[^A-Za-z0-9._-]+')
@@ -44,7 +45,7 @@ def ensure_branch(root: Path, task_id: str) -> Branch | None:
     Returns `None` when the workspace is not a git repository: a scratch
     directory is still a legitimate place to run, it just has no undo button.
     """
-    if not _git(root, 'rev-parse', '--git-dir').ok:
+    if not git(root, 'rev-parse', '--git-dir').ok:
         return None
 
     name = branch_name(task_id)
@@ -52,29 +53,13 @@ def ensure_branch(root: Path, task_id: str) -> Branch | None:
     if name == base:
         return Branch(name=name, base=base, created=False)
 
-    exists = _git(root, 'rev-parse', '--verify', '--quiet', f'refs/heads/{name}').ok
-    switch = _git(root, 'switch', name) if exists else _git(root, 'switch', '--create', name)
+    exists = git(root, 'rev-parse', '--verify', '--quiet', f'refs/heads/{name}').ok
+    switch = git(root, 'switch', name) if exists else git(root, 'switch', '--create', name)
     if not switch.ok:
         raise RuntimeError(f'could not switch to {name}: {switch.text}')
     return Branch(name=name, base=base, created=not exists)
 
 
 def _current_branch(root: Path) -> str:
-    done = _git(root, 'rev-parse', '--abbrev-ref', 'HEAD')
+    done = git(root, 'rev-parse', '--abbrev-ref', 'HEAD')
     return done.text if done.ok else 'HEAD'
-
-
-@dataclass(frozen=True)
-class _Result:
-    ok: bool
-    text: str
-
-
-def _git(root: Path, *args: str) -> _Result:
-    done = subprocess.run(
-        ['git', '-C', str(root), *args],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return _Result(ok=done.returncode == 0, text=f'{done.stdout}{done.stderr}'.strip())

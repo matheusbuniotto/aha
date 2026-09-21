@@ -113,6 +113,9 @@ class TaskSpec:
     branch: bool = True
     """Whether to isolate the run on its own git branch."""
 
+    pull_request: bool = False
+    """Open a pull request when the run verifies. The review gate, not a tool gate."""
+
     autonomy: Autonomy = Autonomy.supervised
     model: str = 'anthropic:claude-sonnet-4-6'
     policy: Policy = field(default_factory=Policy)

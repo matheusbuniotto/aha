@@ -21,6 +21,8 @@ from .classify import Classification, classify
 from .journal import Journal
 from .pack import Pack, Verification
 from .progress import NullReporter, Reporter
+from .publish import PullRequest, publish, summary
+from .recorder import Recorder
 from .spec import TaskSpec
 
 DEFAULT_JOURNAL = Path('.aha/journal.db')
@@ -40,9 +42,22 @@ class RunOutcome:
     branch: str | None = None
     """The branch the work landed on, or None when the workspace is not a repo."""
 
+    pull_request: PullRequest | None = None
+    """Set when `--pr` was asked for; carries the url or why there is none."""
+
     @property
     def ok(self) -> bool:
         return self.status == 'succeeded' and self.verification.passed
+
+
+@dataclass
+class _Attempt:
+    """How far the agent got. Separate from the verdict, which is code's to give."""
+
+    status: str = 'succeeded'
+    output: str = ''
+    usd: float = 0.0
+    branch: Branch | None = None
 
 
 @runtime_checkable
@@ -68,56 +83,93 @@ class LocalRunner:
         spec = spec.with_kind(verdict.kind)
 
         journal = Journal.open(self.journal_path, spec=spec)
-        journal.record(
-            'classified',
-            kind=verdict.kind,
-            confidence=verdict.confidence,
-            source=verdict.source,
-        )
+        journal.record('classified', kind=verdict.kind, confidence=verdict.confidence, source=verdict.source)
         self.reporter.phase(
-            'task',
-            f'{journal.run_id} · {verdict.kind} ({verdict.confidence:.2f} via {verdict.source})',
+            'task', f'{journal.run_id} · {verdict.kind} ({verdict.confidence:.2f} via {verdict.source})'
         )
 
-        approver = self.approver or default_approver(spec.autonomy)
-
-        status, output, usd, branch = 'succeeded', '', 0.0, None
-        try:
-            branch = self._branch(spec, journal)
-            prompt = self._brief(spec, pack, journal)
-            agent = build_agent(
-                spec,
-                pack,
-                approver=approver,
-                journal=journal,
-                reporter=self.reporter,
-                steps_db=self.journal_path.with_name('steps.db'),
-            )
-            self.reporter.phase('working', spec.goal)
-            with agent.override(model=self.model_override) if self.model_override else _nothing():
-                result = await agent.run(prompt, usage_limits=usage_limits(spec))
-            output = str(result.output)
-            usd = _cost_of(result)
-        except Exception as exc:
-            status, output = 'failed', f'{type(exc).__name__}: {exc}'
-            journal.record('run_error', error=output)
-            self.reporter.phase('error', output)
+        recorder = Recorder(journal=journal, reporter=self.reporter)
+        attempt = await self._attempt(spec, pack, journal, recorder)
 
         self.reporter.phase('verify', 'checking the work independently of what the model claims')
         verification = pack.verify(spec)
         journal.record('verified', passed=verification.passed, detail=verification.detail)
-        journal.finish(status=status, usd=usd, detail=verification.detail)
+
+        landed = attempt.status == 'succeeded' and verification.passed
+        pull_request = self._publish(spec, journal, attempt.branch, verification, recorder.counts) if landed else None
+        journal.finish(status=attempt.status, usd=attempt.usd, detail=verification.detail)
 
         return RunOutcome(
             run_id=journal.run_id,
             spec=spec,
             classification=verdict,
-            output=output,
+            output=attempt.output,
             verification=verification,
-            usd=usd,
-            status=status,
-            branch=branch.name if branch else None,
+            usd=attempt.usd,
+            status=attempt.status,
+            branch=attempt.branch.name if attempt.branch else None,
+            pull_request=pull_request,
         )
+
+    async def _attempt(self, spec: TaskSpec, pack: Pack, journal: Journal, recorder: Recorder) -> _Attempt:
+        """Everything that can go wrong, in one place, so every failure is journalled.
+
+        Branching and exploration live in here with the model call for that
+        reason: a misconfigured workspace should land as a failed run a
+        supervisor can read, not as a traceback.
+        """
+        attempt = _Attempt()
+        try:
+            attempt.branch = self._branch(spec, journal)
+            prompt = self._brief(spec, pack, journal)
+            agent = build_agent(
+                spec,
+                pack,
+                approver=self.approver or default_approver(spec.autonomy),
+                journal=journal,
+                recorder=recorder,
+                steps_db=self.journal_path.with_name('steps.db'),
+            )
+            self.reporter.phase('working', spec.goal)
+            with agent.override(model=self.model_override) if self.model_override else _nothing():
+                result = await agent.run(prompt, usage_limits=usage_limits(spec))
+            attempt.output = str(result.output)
+            attempt.usd = _cost_of(result)
+        except Exception as exc:
+            attempt.status, attempt.output = 'failed', f'{type(exc).__name__}: {exc}'
+            journal.record('run_error', error=attempt.output)
+            self.reporter.phase('error', attempt.output)
+        return attempt
+
+    def _publish(
+        self,
+        spec: TaskSpec,
+        journal: Journal,
+        branch: Branch | None,
+        verification: Verification,
+        tools: dict[str, int],
+    ) -> PullRequest | None:
+        """Announce verified work for review, when the human asked for a review."""
+        if not spec.pull_request:
+            return None
+        if branch is None:
+            return PullRequest(url=None, detail='no branch to publish: the workspace is not a git repository')
+
+        result = publish(
+            spec.resolved_workspace,
+            branch=branch,
+            title=f'{spec.task_id or spec.name}: {spec.goal}'[:100],
+            body=summary(
+                goal=spec.goal,
+                run_id=journal.run_id,
+                kind=spec.kind,
+                verification=verification.detail,
+                tools=tools,
+            ),
+        )
+        journal.record('published', url=result.url, detail=result.detail)
+        self.reporter.phase('review', result.url or result.detail)
+        return result
 
     def _branch(self, spec: TaskSpec, journal: Journal) -> Branch | None:
         """Isolate the run on its own branch, so one ticket is one reviewable diff."""

@@ -1,280 +1,151 @@
 # aha
 
-An agent fabric for data and analytics engineering work.
+Run dbt and analytics tasks with an agent, without handing it the keys.
 
-A team describes a task in plain language, watches the agent do it with a human
-approving anything risky, and gets an independent verdict on whether the work
-actually landed. Once a class of task has proven itself, the same task runs
-unattended -- with the risky calls named in advance rather than the safety gate
-switched off.
-
-Built on [Pydantic AI](https://pydantic.dev/docs/ai/) and its harness capability
-library. Inspired by [machinist](https://github.com/owainlewis/machinist)'s core
-idea -- named tasks, a single controlled entrypoint, a durable record, no
-auto-shipping -- reworked around dbt modelling and analysis.
-
-## Install
+You describe the task in plain English. It works on its own branch, asks before
+anything risky, and then **code** — not the model — checks whether the work
+actually landed. `dbt build` green or it didn't happen.
 
 ```bash
 uv sync --group dbt
+cp .env.example .env          # put a key in it
+uv run aha run "add a staging model for raw orders with tests" -w ./my-dbt-project -t TASK-12
 ```
 
-## Use
+That's it. The rest of this file is detail you can read when you need it.
+
+## What a run does
+
+```
+classify ─▶ branch ─▶ explore ─▶ agent works ─▶ verify ─▶ (optional) PR
+```
+
+1. **classify** — what kind of task is this? Decides instructions and risk posture. Free, offline, no model call.
+2. **branch** — switches to `aha/TASK-12`. One ticket, one diff, easy to throw away.
+3. **explore** — reads dbt's manifest and works out which tables you probably mean, and what feeds them. So the model doesn't invent a `ref()`.
+4. **work** — the agent edits files and runs dbt. Risky calls stop and ask you.
+5. **verify** — we run `dbt build` ourselves. The model's opinion of its own work is ignored.
+6. **PR** — with `--pr`, verified work gets pushed and a pull request opened.
+
+Everything lands in a SQLite journal: `uv run aha runs`.
+
+## Commands
 
 ```bash
-uv run aha packs                              # what the agent knows how to be asked for
-uv run aha doctor                             # model routing and provider credentials
-uv run aha classify "why is revenue wrong?"   # how a request would be routed, for free
-uv run aha explore "why is revenue wrong?"    # the tables it would start from, for free
-uv run aha run "add a staging model for raw orders with tests" \
-    --workspace examples/jaffle --pack dbt --autonomy supervised --task-id TASK-12
-uv run aha runs                               # the audit trail
+uv run aha run "..." -w path [-t TASK-12] [-a supervised|guarded|autonomous] [--pr]
+uv run aha explore "why is revenue wrong?"   # tables + lineage it would start from
+uv run aha classify "why is revenue wrong?"  # how it'd route the request
+uv run aha packs                             # what it knows how to be asked
+uv run aha doctor                            # which models/keys are wired up
+uv run aha runs                              # history
 ```
 
-The test suite runs offline against a scripted model, so the whole path is
-exercised without a provider.
+Or just `make` — it lists everything, and `make demo` runs the whole thing on a
+throwaway copy of the example project.
 
-## Models
+## Not letting it break prod
 
-Any provider Pydantic AI knows works as-is (`anthropic:...`, `openai:...`,
-`bedrock:...`). Two prefixes route to OpenAI-compatible endpoints it cannot
-infer:
+Safety is code, not prompt wishes:
 
-| Model name | Endpoint | Credentials |
+- Filesystem is rooted at your workspace. `.env`, `profiles.yml`, `*.pem`, `.git` are unreadable, full stop.
+- **No shell** in the dbt pack. dbt runs as a fixed argv (`dbt build --select x`), never a command line the model wrote.
+- `query_sql` is read-only: writes are refused before a connection is even opened, and every query gets a `LIMIT`.
+- Every tool is `read`, `mutate`, or `high`. Raising autonomy narrows *what* gets gated — it never ungates a high-risk call.
+
+| autonomy | gated | who answers |
 |---|---|---|
-| `opencode-go/<id>` | `https://opencode.ai/zen/go/v1` | `OPENCODE_API_KEY` |
-| `openai-compatible/<id>` | `$AHA_OPENAI_BASE_URL` | `AHA_OPENAI_API_KEY` |
+| `supervised` | mutate + high | you, at the terminal |
+| `guarded` | high | you, at the terminal |
+| `autonomous` | high | a pre-authorised list — denies by default |
 
-[opencode Go](https://opencode.ai/docs/go/) is a flat-rate subscription over 30+
-open coding models -- a cheap way to run the unattended tail without metering
-every task against a frontier provider. The generic prefix covers anything else
-that speaks chat-completions: a self-hosted vLLM, a LiteLLM router, a Bedrock
-gateway.
+Unattended means naming the calls up front (`--allow dbt_build`), not turning
+the gate off. Plus hard per-run limits on cost and steps.
 
-opencode Go routes on a stable per-conversation id, so the run id is sent as
-`x-opencode-session` along with an `aha/<version>` user agent. It also bills a
-flat subscription rather than per token, so `--max-usd` does not bind there --
-`Policy.max_steps` is the ceiling that does.
+## Watching it work
 
-```bash
-export OPENCODE_API_KEY=...
-uv run aha doctor -m opencode-go/kimi-k3       # how it routes, what is missing
-uv run aha run "..." -m opencode-go/kimi-k3
-
-export AHA_OPENAI_BASE_URL=http://localhost:4000/v1
-export AHA_OPENAI_API_KEY=...
-uv run aha run "..." -m openai-compatible/llama-3.3-70b
-```
-
-Unknown names pass through as strings, so an agent still assembles and is
-inspectable with no credentials present. A missing key names the variable to
-set and lands as a failed run in the journal rather than a traceback.
-
-## How it fits together
+You get live output, not a black box:
 
 ```
-TaskSpec ─▶ classify ─▶ branch ─▶ explore ─▶ build_agent ─▶ run ─▶ verify
-   │                      │          │           │           │        │
- policy                aha/TASK-  tables +    tools, rails, progress  independent
- autonomy                 ID       lineage    approval gate  to the   check,
-                                                             console  in code
-```
-
-Three of those steps happen before the model is asked anything: the task is
-classified, the workspace is put on its own branch, and the project is surveyed.
-All three are deterministic, free, and inspectable (`aha classify`, `aha explore`).
-
-### The fabric (`aha.fabric`)
-
-Domain-free. A `TaskSpec` is a goal, a workspace, an autonomy level, and a
-`Policy`. A `Runner` takes one and returns a `RunOutcome`. Nothing here knows
-what dbt is.
-
-### Packs (`aha.packs`)
-
-A pack is a domain plugged into the fabric. It supplies the task kinds it answers
-to, its default blast radius, its house style, its tools, an optional skill
-library, and an independent check that the work is done. `dbt` is the first;
-`generic` is the smallest worked example.
-
-```python
-class Pack(Protocol):
-    name: str
-
-    def kinds(self) -> tuple[TaskKind, ...]: ...
-    def policy(self) -> Policy: ...
-    def instructions(self, spec: TaskSpec) -> str: ...
-    def capabilities(self, spec: TaskSpec) -> list[AgentCapability[None]]: ...
-    def explore(self, spec: TaskSpec) -> str: ...
-    def skills(self) -> Path | None: ...
-    def verify(self, spec: TaskSpec) -> Verification: ...
-```
-
-A pack's instructions ride on the capability that owns its tools, so guidance
-and the tools it governs travel together and the fabric never has to know what
-either says.
-
-### Exploration
-
-A request names things in business language; the project names them
-`stg_jaffle__orders`. `Pack.explore` closes that gap once, before the run, from
-dbt's own manifest: which models, seeds, and sources exist, which of them the
-goal is probably about, and what feeds each one. The briefing goes into the
-prompt, and the same index is exposed as two read-only tools -- `find_tables`
-(name, description, or column) and `lineage` (what breaks if you change this).
-
-Letting the model discover all of that by grepping costs turns and invites
-invented `ref()`s. Doing it in code costs nothing and is inspectable:
-
-```bash
-uv run aha explore "the customers mart is showing duplicate rows" -w examples/jaffle
-```
-
-### Branching
-
-Every run switches the workspace onto `aha/<task-id>`, created from the current
-branch, and falls back to the run id when no ticket was named. One ticket is one
-branch is one reviewable diff, which is what makes unattended work delegatable;
-it is also the real undo button, since the approval gate decides what may happen
-and git decides how cheaply it can be unhappened. The runner does this, not the
-agent -- `.git/**` stays protected. A workspace that is not a repository still
-runs, and the journal records that it was not isolated.
-
-### Watching a run
-
-A run that prints nothing until it finishes is indistinguishable from one that
-has hung. Every tool call, result headline, and line of the model's own narration
-is printed as it happens, from the same event stream the journal is built from,
-so what you watch and what is recorded cannot drift apart:
-
-```
-    task task-33898512 · analysis (0.95 via rules)
-  branch aha/TASK-43 (created from main)
- explore seeds (2): raw_customers, raw_orders
-         ...
- working count how many customers are in the warehouse
-0:04 -> read_file path=models/staging/stg_customers.sql
-0:06 <- find_tables: raw_customers (seed) seeds/raw_customers.csv [+7 lines]
+    task TASK-12-2377134c · documentation (0.95 via rules)
+  branch aha/TASK-12 (created from main)
+ explore seeds (2): raw_customers, raw_orders ...
+0:05 -> read_file path=models/staging/schema.yml
+0:08 <- find_tables: raw_customers (seed) seeds/raw_customers.csv [+7 lines]
 0:08 .. Grain is one row per customer. Now let me count.
 ```
 
-`Reporter` is a protocol, so a cloud runner pushes the same lines to CloudWatch
-or a Slack thread. `--quiet` turns it off; library use is silent by default.
+Same event stream the journal is built from, so what you watch and what's
+recorded can't drift. `--quiet` if you'd rather not.
 
-### Skills
+## Warehouses
 
-Deep dbt know-how lives in portable [Agent Skill](https://pydantic.dev/docs/ai/harness/skills/)
-packages under `src/aha/packs/skills/dbt/`, loaded on demand rather than held in
-context every run:
+`query_sql` follows your `profiles.yml` — no second config to keep in sync.
 
-| Skill | Fires when |
+| profile type | needs |
 |---|---|
-| `grain-and-joins` | duplicate rows, inflated aggregates, a fanning join |
-| `test-design` | adding tests, a noisy test, generic vs singular, severity |
-| `incremental-models` | a slow table, `unique_key` choice, late-arriving rows |
-| `debugging-failures` | a compilation error, a database error, a failing test |
+| `duckdb` | nothing, it's local |
+| `databricks` | `uv sync --group databricks`, and creds in your profile (`env_var` references work) |
 
-Two selection mechanisms work together. Classification picks the *primary*
-instruction and the risk posture deterministically before the run starts; skills
-cover the long tail, and the model pulls one in when a task turns out to need it.
+Use a read-only service principal on Databricks anyway. Our guard is a guard,
+not a permission system. Other adapters say plainly that they're unsupported
+rather than failing weirdly — adding one is a ~20 line class in `warehouse.py`.
 
-A team adds its own house conventions by dropping a `SKILL.md` into a directory
-and naming it, without writing Python:
+## Models
+
+Anything Pydantic AI knows (`anthropic:...`, `openai:...`, `bedrock:...`), plus
+two prefixes for OpenAI-compatible endpoints:
+
+| name | endpoint | key |
+|---|---|---|
+| `opencode-go/<id>` | opencode Zen | `OPENCODE_API_KEY` |
+| `openai-compatible/<id>` | `$AHA_OPENAI_BASE_URL` | `AHA_OPENAI_API_KEY` |
+
+[opencode Go](https://opencode.ai/docs/go/) is flat-rate, which is a cheap way
+to run the boring tail of tasks. Note it doesn't report per-token cost, so
+`--max-usd` doesn't bind there; `max_steps` is the ceiling that does.
+
+Set `AHA_MODEL` in `.env` and forget about it. `uv run aha doctor` tells you
+what's actually configured.
+
+## Adding your own domain
+
+A "pack" is a domain plugged into the fabric. dbt is one; `generic` is the
+minimal example. Implement six methods:
 
 ```python
-TaskSpec(..., context={'skills_dir': '.agents/skills'})
+class Pack(Protocol):
+    def kinds(self) -> tuple[TaskKind, ...]: ...  # what it can be asked for
+    def policy(self) -> Policy: ...  # blast radius
+    def instructions(self, spec) -> str: ...  # house style
+    def capabilities(self, spec) -> list[...]: ...  # tools
+    def explore(self, spec) -> str: ...  # pre-run survey
+    def verify(self, spec) -> Verification: ...  # did it actually work
 ```
 
-## Safe execution
-
-Safety is enforced in code before a tool runs. None of it is delegated to the
-system prompt.
-
-- **Workspace confinement.** The filesystem is rooted at the workspace.
-  Credentials, `profiles.yml`, `.env`, and `.git` are unreadable whatever the
-  model asks for.
-- **No free shell.** dbt is invoked with a fixed argument vector, never through
-  a shell. The agent picks verbs and selectors, not command lines. The dbt pack
-  grants no shell at all; where a pack does grant one (`generic`), it is an
-  explicit executable allowlist.
-- **Read-only analysis.** `query_sql` opens DuckDB read-only and refuses
-  statements that would write.
-- **Risk bands.** Every tool is `read`, `mutate`, or `high`. Reads are free,
-  mutations are recoverable, `high` touches the warehouse or the network.
-- **The gate does not open.** Raising autonomy narrows *what* is gated; it never
-  ungates a high-risk call. What changes is who answers:
-
-  | Autonomy | Gated | Answered by |
-  |---|---|---|
-  | `supervised` | mutate + high | a person at the terminal |
-  | `guarded` | high | a person at the terminal |
-  | `autonomous` | high | a pre-authorisation rule -- `DenyUnattended` by default |
-
-  Delegating a task to the cloud means writing down which risky tools are
-  allowed (`--allow dbt_build`, or `PreAuthorized.of('dbt_build')`), not
-  removing the check.
-- **Hard ceilings.** Per-run cost and request limits are enforced by the runtime.
-- **Independent verification.** The agent's own claim of success is ignored.
-  `Pack.verify` runs real code -- for dbt, `dbt build` -- and that verdict decides
-  `RunOutcome.ok`. There is a test asserting a confident lie still fails.
-- **A durable record.** Every classification, approval, refusal, and verdict
-  lands in SQLite and is queryable with `aha runs`. A `Recorder` capability
-  listens to the run's event stream as well, so the trail covers tool calls the
-  approval gate was never asked to rule on -- reads, planning, compaction -- and
-  not just the ones it gated.
-
-## Classification
-
-Which kind of task this is decides the instructions and the risk posture, so it
-runs before any frontier model does. TypeSafe's Jev answers it as a typed
-judgment when `TYPESAFE_API_KEY` is set; otherwise a hint-based rule answers it
-offline. Both report a confidence, and neither can break a run -- a failed
-classifier falls through to the rules.
-
-## Toward AWS
-
-The `Runner` protocol is the seam. A task is defined, gated, and judged
-identically wherever it executes; a cloud runner changes where the process runs
-and who approves, not what a task is.
-
-Already in place: `StepPersistence` snapshots every step to SQLite, so a run can
-be resumed or forked; `PreAuthorized` expresses unattended permission; the
-journal is the audit trail a supervisor reads afterwards.
-
-Still to build: a queue-driven `RemoteRunner`, a container image, and moving the
-journal and step store off local SQLite.
-
-## Make
-
-`make` lists everything. The ones worth knowing:
-
-```bash
-make install          # every dependency group
-make demo             # unattended run on a throwaway copy of examples/jaffle
-make demo-supervised  # the same run, approving each risky call yourself
-make explore          # the tables and lineage a run would start from
-make diff             # what the last demo changed, on its branch
-make runs             # what the last demo did
-make journal          # that run broken down by event kind
-make check            # lint and test, what CI would run
-make test-unit        # the fast loop, skipping anything that shells out to dbt
-make doctor           # model routing and provider credentials
-make skills           # the dbt skills and when each fires
-```
-
-`demo` takes a `GOAL`, so trying a new kind of task is one line:
-
-```bash
-make demo GOAL="add accepted_values tests to the status column" TASK=TASK-42
-```
+Nothing in `aha.fabric` knows what dbt is. Team conventions can go in
+`SKILL.md` files (`context={'skills_dir': '.agents/skills'}`) with no Python at
+all — the dbt pack ships four covering grain, tests, incremental models, and
+debugging.
 
 ## Tests
 
 ```bash
-make test         # everything, including the dbt end-to-end runs
-make test-unit    # fast: no dbt, no warehouse
+make test-unit   # fast, no dbt
+make test        # everything, including real dbt runs
 ```
 
-The end-to-end tests drive a scripted model, so they are deterministic and need
-no API key -- but policy, approval, journalling, dbt, and verification all run
+End-to-end tests drive a scripted model, so they're deterministic and need no
+API key — but policy, approvals, journalling, git, dbt, and verification all run
 for real.
+
+## Where this is going
+
+Local terminal runs today. `Runner` is a protocol, so a cloud runner changes
+where the process runs and who approves — not what a task is or how it's judged.
+Step persistence and the audit trail are already in place for that.
+
+Built on [Pydantic AI](https://pydantic.dev/docs/ai/). Idea borrowed from
+[machinist](https://github.com/owainlewis/machinist): named tasks, one
+entrypoint, a durable record, nothing auto-ships.
+
+MIT.

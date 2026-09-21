@@ -10,7 +10,6 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,10 +18,12 @@ from pydantic_ai.capabilities import AgentCapability, Capability
 from ..fabric.pack import TaskKind, Verification, register
 from ..fabric.spec import Policy, Risk, TaskSpec
 from .explore import Manifest, describe, survey
+from .warehouse import open_warehouse, query
 
 MAX_OUTPUT_CHARS = 20_000
 SKILLS_DIR = Path(__file__).parent / 'skills' / 'dbt'
 MANIFEST = Path('target') / 'manifest.json'
+NO_MANIFEST = 'no manifest yet; run dbt_parse first'
 
 KINDS = (
     TaskKind(
@@ -149,6 +150,10 @@ def _clip(text: str) -> str:
     return f'{text[:half]}\n\n... [{len(text) - MAX_OUTPUT_CHARS} chars elided] ...\n\n{text[-half:]}'
 
 
+def _select(selector: str) -> list[str]:
+    return ['--select', selector] if selector else []
+
+
 def _dbt(project: Path, *args: str, timeout: float = 600.0) -> str:
     """Invoke dbt with a fixed argv and return its combined output."""
     executable = shutil.which('dbt')
@@ -197,8 +202,7 @@ class DbtPack:
 
         def dbt_ls(select: str = '') -> str:
             """List the resources in the project, optionally narrowed by a dbt selector."""
-            args = ['ls'] + (['--select', select] if select else [])
-            return _dbt(project, *args)
+            return _dbt(project, 'ls', *_select(select))
 
         def dbt_parse() -> str:
             """Parse the project and report any yml or Jinja errors. Changes nothing."""
@@ -206,43 +210,37 @@ class DbtPack:
 
         def dbt_compile(select: str = '') -> str:
             """Compile models to SQL without running them. Use this to inspect generated SQL."""
-            args = ['compile'] + (['--select', select] if select else [])
-            return _dbt(project, *args)
+            return _dbt(project, 'compile', *_select(select))
 
         def dbt_build(select: str = '', full_refresh: bool = False) -> str:
             """Run and test models. This writes to the warehouse. Narrow it with `select`."""
-            args = ['build'] + (['--select', select] if select else [])
-            if full_refresh:
-                args.append('--full-refresh')
-            return _dbt(project, *args)
+            refresh = ['--full-refresh'] if full_refresh else []
+            return _dbt(project, 'build', *_select(select), *refresh)
 
         def dbt_test(select: str = '') -> str:
             """Run tests only, without rebuilding models."""
-            args = ['test'] + (['--select', select] if select else [])
-            return _dbt(project, *args)
+            return _dbt(project, 'test', *_select(select))
 
         def dbt_seed() -> str:
             """Load the project's seed CSVs into the warehouse."""
             return _dbt(project, 'seed')
 
         def query_sql(sql: str, limit: int = 50) -> str:
-            """Run a read-only SQL query against the project's DuckDB warehouse."""
-            return _query_duckdb(project, sql, limit)
+            """Run a read-only SQL query against the warehouse this project is pointed at."""
+            return query(open_warehouse(project, spec.context.get('target')), sql, limit)
 
         def find_tables(term: str) -> str:
             """Find models, seeds, and sources whose name, columns, or description mention `term`."""
             manifest = _manifest(project)
-            if manifest is None:
-                return 'no manifest yet; run dbt_parse first'
-            return describe(manifest, manifest.find(term))
+            return describe(manifest, manifest.find(term)) if manifest else NO_MANIFEST
 
         def lineage(name: str) -> str:
             """Show what a model or source depends on, and what would break if you change it."""
             manifest = _manifest(project)
             if manifest is None:
-                return 'no manifest yet; run dbt_parse first'
-            matches = [r for r in manifest.resources.values() if r.name == name] or manifest.find(name)
-            return describe(manifest, matches[:1])
+                return NO_MANIFEST
+            exact = [r for r in manifest.resources.values() if r.name == name]
+            return describe(manifest, (exact or manifest.find(name))[:1])
 
         return [
             Capability(
@@ -274,15 +272,10 @@ class DbtPack:
         return SKILLS_DIR if SKILLS_DIR.is_dir() else None
 
     def verify(self, spec: TaskSpec) -> Verification:
-        """The project must parse and its models must build and pass their tests."""
-        project = spec.resolved_workspace
-        if spec.kind == 'analysis':
-            output = _dbt(project, 'parse')
-            passed = output.startswith('exit=0')
-            return Verification(passed=passed, detail=_tail(output))
-        output = _dbt(project, 'build')
-        passed = output.startswith('exit=0')
-        return Verification(passed=passed, detail=_tail(output))
+        """The project must parse, and unless it was only asked a question, build green."""
+        command = 'parse' if spec.kind == 'analysis' else 'build'
+        output = _dbt(spec.resolved_workspace, command)
+        return Verification(passed=output.startswith('exit=0'), detail=_tail(output))
 
 
 def _manifest(project: Path) -> Manifest | None:
@@ -295,30 +288,6 @@ def _manifest(project: Path) -> Manifest | None:
 
 def _tail(output: str, lines: int = 12) -> str:
     return '\n'.join(output.strip().splitlines()[-lines:])
-
-
-def _query_duckdb(project: Path, sql: str, limit: int) -> str:
-    """Open the project's DuckDB file read-only and return rows as text."""
-    forbidden = {'insert', 'update', 'delete', 'drop', 'alter', 'create', 'attach', 'copy'}
-    if set(sql.lower().split()) & forbidden:
-        return 'refused: query_sql is read-only; use dbt_build to change the warehouse'
-    try:
-        import duckdb
-    except ImportError:
-        return 'duckdb is not installed in this environment'
-
-    candidates = sorted(project.glob('*.duckdb')) + sorted(project.glob('**/*.duckdb'))
-    if not candidates:
-        return 'no DuckDB database found yet; run dbt_build first'
-    try:
-        connection = duckdb.connect(str(candidates[0]), read_only=True)
-        rows = connection.sql(f'SELECT * FROM ({sql}) LIMIT {int(limit)}')
-        return _clip(str(rows))
-    except Exception as exc:
-        return f'query failed: {type(exc).__name__}: {exc}'
-    finally:
-        with suppress(Exception):
-            connection.close()
 
 
 register(DbtPack())

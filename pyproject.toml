@@ -3,6 +3,7 @@ name = "aha"
 version = "0.1.0"
 description = "An agent fabric for supervised data and analytics engineering tasks"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Matheus Buniotto", email = "matheus.buniotto@gmail.com" }
 ]
@@ -11,6 +12,7 @@ dependencies = [
     "pydantic-ai>=2.46.0",
     "pydantic-ai-harness>=0.32.0",
     "python-dotenv>=1.2.3",
+    "pyyaml>=6.0.2",
     "typer>=0.27.2",
 ]
 
@@ -23,6 +25,11 @@ dbt = [
     "dbt-core>=1.12.5",
     "dbt-duckdb>=1.11.0",
     "duckdb>=1.5.5",
+]
+# Only the read-only query path. `dbt-databricks` pins an older dbt-core, so it
+# belongs in the environment that runs dbt, not in ours.
+databricks = [
+    "databricks-sql-connector>=4.2.1",
 ]
 dev = [
     "anyio>=4.15.1",

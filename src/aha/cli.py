@@ -6,6 +6,7 @@ import asyncio
 import os
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import Annotated
 
@@ -15,7 +16,17 @@ from rich.console import Console
 from rich.table import Table
 
 from . import packs  # noqa: F401 - registers the built-in packs
-from .fabric import Autonomy, ConsoleReporter, LocalRunner, NullReporter, PreAuthorized, TaskSpec, get, names
+from .fabric import (
+    Autonomy,
+    ConsoleReporter,
+    LocalRunner,
+    NullReporter,
+    Policy,
+    PreAuthorized,
+    TaskSpec,
+    get,
+    names,
+)
 from .fabric.classify import classify
 from .fabric.models import ENDPOINTS, describe
 from .fabric.runner import DEFAULT_JOURNAL
@@ -42,12 +53,13 @@ def run(
         str,
         typer.Option('--model', '-m', help='Provider model, or opencode-go/<id>, or openai-compatible/<id>.'),
     ] = DEFAULT_MODEL,
-    name: Annotated[str, typer.Option('--name', help='Slug recorded in the journal.')] = 'task',
+    name: Annotated[str | None, typer.Option('--name', help='Slug recorded in the journal.')] = None,
     task_id: Annotated[
         str | None,
         typer.Option('--task-id', '-t', help='Ticket this run belongs to, such as TASK-12. Names the branch.'),
     ] = None,
     branch: Annotated[bool, typer.Option('--branch/--no-branch', help='Isolate the run on its own git branch.')] = True,
+    pr: Annotated[bool, typer.Option('--pr', help='Open a pull request when the run verifies.')] = False,
     quiet: Annotated[bool, typer.Option('--quiet', '-q', help='Only print the final report.')] = False,
     journal: Annotated[Path, typer.Option('--journal', help='Where the audit trail is kept.')] = DEFAULT_JOURNAL,
     max_usd: Annotated[float, typer.Option('--max-usd', help='Hard spend ceiling for this run.')] = 2.0,
@@ -59,12 +71,13 @@ def run(
     """Run one task end to end and report whether it actually landed."""
     domain = get(pack)
     spec = TaskSpec(
-        name=name,
+        name=name or (task_id.lower() if task_id else 'task'),
         goal=goal,
         workspace=workspace,
         pack=pack,
         task_id=task_id,
         branch=branch,
+        pull_request=pr,
         autonomy=autonomy,
         model=model,
         policy=_with_ceiling(domain.policy(), max_usd),
@@ -102,7 +115,7 @@ def classify_goal(
     """Show how a request would be classified, without running anything."""
     verdict = classify(goal, get(pack).kinds())
     flag = ' [yellow](uncertain)[/]' if verdict.uncertain else ''
-    console.print(f'{verdict.kind} · {verdict.confidence:.2f} via {verdict.source}{flag}')
+    console.print(f'{verdict}{flag}')
 
 
 @app.command('explore')
@@ -163,19 +176,18 @@ def list_runs(
     console.print(table)
 
 
-def _with_ceiling(policy, max_usd: float):
-    from dataclasses import replace
-
+def _with_ceiling(policy: Policy, max_usd: float) -> Policy:
     return replace(policy, max_usd=max_usd)
 
 
 def _report(outcome) -> None:
-    verdict = outcome.classification
     console.print(f'\n[dim]run[/] {outcome.run_id}')
-    console.print(f'[dim]kind[/] {verdict.kind} ({verdict.confidence:.2f} via {verdict.source})')
+    console.print(f'[dim]kind[/] {outcome.classification}')
     console.print(f'[dim]status[/] {outcome.status} · [dim]cost[/] ${outcome.usd:.4f}')
     if outcome.branch:
         console.print(f'[dim]branch[/] {outcome.branch}')
+    if outcome.pull_request:
+        console.print(f'[dim]pr[/] {outcome.pull_request.url or outcome.pull_request.detail}')
 
     mark = '[green]verified[/]' if outcome.verification.passed else '[red]not verified[/]'
     console.print(f'[dim]check[/] {mark}')

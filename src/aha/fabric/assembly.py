@@ -29,7 +29,6 @@ from .approvals import Approver, approval_gate
 from .journal import Journal
 from .models import resolve as resolve_model
 from .pack import Pack
-from .progress import NullReporter, Reporter
 from .recorder import Recorder
 from .spec import TaskSpec
 
@@ -110,7 +109,7 @@ def build_agent(
     *,
     approver: Approver,
     journal: Journal | None = None,
-    reporter: Reporter | None = None,
+    recorder: Recorder | None = None,
     steps_db: Path | None = None,
     extra: list[AgentCapability[None]] | None = None,
 ) -> Agent[None, str]:
@@ -126,7 +125,7 @@ def build_agent(
         *pack.capabilities(spec),
         *skill_capabilities(spec, pack),
         *context_capabilities(),
-        Recorder(journal=journal, reporter=reporter or NullReporter()),
+        recorder or Recorder(journal=journal),
         approval_gate(
             policy=spec.policy,
             autonomy=spec.autonomy,

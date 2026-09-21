@@ -6,6 +6,7 @@ from .classify import Classification, classify
 from .journal import Journal
 from .pack import Pack, TaskKind, Verification, get, names, register
 from .progress import ConsoleReporter, NullReporter, Reporter
+from .publish import PullRequest, publish
 from .runner import LocalRunner, Runner, RunOutcome
 from .spec import Autonomy, Policy, Risk, TaskSpec
 
@@ -23,6 +24,7 @@ __all__ = [
     'Pack',
     'Policy',
     'PreAuthorized',
+    'PullRequest',
     'Reporter',
     'Risk',
     'RunOutcome',
@@ -36,5 +38,6 @@ __all__ = [
     'ensure_branch',
     'get',
     'names',
+    'publish',
     'register',
 ]
