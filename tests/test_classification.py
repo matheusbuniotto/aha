@@ -39,3 +39,23 @@ def test_an_unrecognisable_request_is_flagged_uncertain() -> None:
 def test_classification_never_raises_without_a_vocabulary() -> None:
     verdict = classify('anything at all', ())
     assert verdict.kind == 'unclassified'
+
+
+def test_jev_confidence_is_read_from_the_answer_not_invented() -> None:
+    """A stated confidence must survive: a flat default hides exactly the uncertainty we want."""
+    from dataclasses import dataclass
+
+    from aha.fabric.classify import _confidence
+
+    @dataclass
+    class Stated:
+        confidence: float
+        probabilities: dict[str, float]
+
+    @dataclass
+    class Spread:
+        probabilities: dict[str, float]
+
+    assert _confidence(Stated(confidence=0.98, probabilities={'a': 0.99, 'b': 0.01})) == 0.98
+    assert _confidence(Spread(probabilities={'a': 0.7, 'b': 0.3})) == 0.7
+    assert _confidence(object()) == 0.75

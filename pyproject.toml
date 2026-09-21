@@ -26,6 +26,10 @@ dbt = [
     "dbt-duckdb>=1.11.0",
     "duckdb>=1.5.5",
 ]
+# Classification via TypeSafe's Jev. Optional: rules answer without it.
+jev = [
+    "typesafe-sdk>=0.7.0",
+]
 # Only the read-only query path. `dbt-databricks` pins an older dbt-core, so it
 # belongs in the environment that runs dbt, not in ours.
 databricks = [

@@ -21,7 +21,7 @@ That's it. The rest of this file is detail you can read when you need it.
 classify ─▶ branch ─▶ explore ─▶ agent works ─▶ verify ─▶ (optional) PR
 ```
 
-1. **classify** — what kind of task is this? Decides instructions and risk posture. Free, offline, no model call.
+1. **classify** — what kind of task is this? Decides instructions and risk posture. Free, offline, no frontier model call. See [Classification](#classification).
 2. **branch** — switches to `aha/TASK-12`. One ticket, one diff, easy to throw away.
 3. **explore** — reads dbt's manifest and works out which tables you probably mean, and what feeds them. So the model doesn't invent a `ref()`.
 4. **work** — the agent edits files and runs dbt. Risky calls stop and ask you.
@@ -29,6 +29,39 @@ classify ─▶ branch ─▶ explore ─▶ agent works ─▶ verify ─▶ (o
 6. **PR** — with `--pr`, verified work gets pushed and a pull request opened.
 
 Everything lands in a SQLite journal: `uv run aha runs`.
+
+## Classification
+
+Routing the request is a small, typed judgment, so it shouldn't need a big model.
+We're **trialling [TypeSafe's Jev](https://docs.typesafe.ai)** for it:
+
+```bash
+uv sync --group jev        # + TYPESAFE_API_KEY in .env
+```
+
+The request becomes a `Choice` over the pack's task kinds and comes back with a
+confidence. No key, no SDK, or a failed call — a keyword rule answers instead
+and the run carries on regardless. Either way you get a confidence and a source,
+and both go in the journal, which is how we're comparing them:
+
+```bash
+$ uv run aha classify "the customers mart is showing duplicate rows"
+bug_fix (0.95 via jev)          # rules: bug_fix (0.60) — right, but unsure
+
+$ uv run aha classify "how many customers churned last month"
+analysis (1.00 via jev)
+
+$ uv run aha classify "make it better"
+model_build (0.51 via jev) (uncertain)
+```
+
+Where it earns its place so far: the rules get short, keyword-shaped dbt
+requests right, but their confidence is noise — a number derived from how many
+words happened to match. Jev's is calibrated, so a vague request actually reads
+as vague (that 0.51), and `uncertain` becomes something you could route on
+instead of a decoration.
+
+## Commands
 
 ## Commands
 

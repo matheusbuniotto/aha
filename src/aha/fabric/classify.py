@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from .pack import TaskKind
 
@@ -59,10 +60,17 @@ def _classify_with_jev(goal: str, kinds: tuple[TaskKind, ...]) -> Classification
                 },
             )
         answer = response.choices['kind']
-        confidence = float(getattr(answer, 'probability', None) or 0.75)
-        return Classification(kind=answer.choice, confidence=confidence, source='jev')
+        return Classification(kind=answer.choice, confidence=_confidence(answer), source='jev')
     except Exception:
         return None
+
+
+def _confidence(answer: Any) -> float:
+    """Jev reports how concentrated the distribution is; fall back to its own spread."""
+    if (stated := getattr(answer, 'confidence', None)) is not None:
+        return float(stated)
+    spread = getattr(answer, 'probabilities', None) or {}
+    return float(max(spread.values())) if spread else 0.75
 
 
 def _classify_with_rules(goal: str, kinds: tuple[TaskKind, ...]) -> Classification:
