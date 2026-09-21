@@ -35,7 +35,10 @@ load_dotenv()
 
 DEFAULT_MODEL = os.getenv('AHA_MODEL') or 'anthropic:claude-sonnet-4-6'
 
-app = typer.Typer(add_completion=False, help='Run supervised agent tasks over a workspace.')
+app = typer.Typer(
+    add_completion=False,
+    help='aha -- Agentic Harness for Analytics. Run supervised agent tasks over a workspace.',
+)
 console = Console()
 
 

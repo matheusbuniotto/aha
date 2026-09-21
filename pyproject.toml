@@ -1,7 +1,7 @@
 [project]
 name = "aha"
 version = "0.1.0"
-description = "An agent fabric for supervised data and analytics engineering tasks"
+description = "Agentic Harness for Analytics: supervised agent runs for dbt and analytics work"
 readme = "README.md"
 license = "MIT"
 authors = [

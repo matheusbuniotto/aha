@@ -1,6 +1,7 @@
 # aha
 
-Run dbt and analytics tasks with an agent, without handing it the keys.
+**Agentic Harness for Analytics.** Run dbt and analytics tasks with an agent,
+without handing it the keys.
 
 You describe the task in plain English. It works on its own branch, asks before
 anything risky, and then **code** — not the model — checks whether the work
