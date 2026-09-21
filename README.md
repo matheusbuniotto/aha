@@ -13,7 +13,8 @@ cp .env.example .env          # put a key in it
 uv run aha run "add a staging model for raw orders with tests" -w ./my-dbt-project -t TASK-12
 ```
 
-That's it. The rest of this file is detail you can read when you need it.
+New here? **[QUICKSTART.md](QUICKSTART.md)** gets you from clone to a verified
+run in five minutes. The rest of this file is detail for when you need it.
 
 ## What a run does
 
@@ -39,6 +40,11 @@ answers all four in a single typed call:
 ```bash
 uv sync --group jev        # + TYPESAFE_API_KEY in .env
 ```
+
+Entirely optional. No key, no SDK, or a bad key — the run works the same, a
+keyword rule answers `kind`, and the other three judgments stay unknown, where
+**unknown means no adjustment**. `uv run aha doctor` asks Jev a throwaway
+question and tells you which one you're actually getting.
 
 | judgment | question | what it changes |
 |---|---|---|
@@ -73,10 +79,6 @@ shorten the leash; it can never widen either. A destructive-looking request
 raises `mutate` tools to `high` — reusing the gate you already have instead of
 inventing a second one — and reads are never escalated. A big task doesn't earn
 a bigger budget: ceilings are yours to grant.
-
-No key, no SDK, or a failed call? A keyword rule answers `kind` and the other
-three stay unknown, where **unknown means no adjustment**. A missing classifier
-can't tighten or loosen anything. `uv run aha doctor` says which one you've got.
 
 Worth knowing: the keyword rules get short dbt requests right about as often,
 but their confidence is an artifact of how many words matched. Jev's is

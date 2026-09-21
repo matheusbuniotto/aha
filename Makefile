@@ -1,7 +1,9 @@
 # Run `make` to see what is available.
 
-DBT      := uv run --group dbt --group jev
-DEV      := uv run --group dbt --group dev --group jev
+# Jev is optional: `make demo JEV=1` adds it, everything works without it.
+GROUPS   := --group dbt $(if $(JEV),--group jev)
+DBT      := uv run $(GROUPS)
+DEV      := uv run $(GROUPS) --group dev
 TASK     ?= TASK-1
 DEMO     := /tmp/aha-demo-$(TASK)
 PROJECT  := examples/jaffle
@@ -19,7 +21,7 @@ help: ## Show this help
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 install: ## Install every dependency group
-	uv sync --group dbt --group dev
+	uv sync --group dbt --group dev --group jev
 
 check: lint test ## Lint and test, what CI would run
 

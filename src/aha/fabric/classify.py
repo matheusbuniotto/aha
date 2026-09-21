@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -145,6 +146,27 @@ def triage(goal: str, kinds: tuple[TaskKind, ...]) -> Triage:
 def classify(goal: str, kinds: tuple[TaskKind, ...]) -> Classification:
     """Just the kind, for callers that only route on it."""
     return triage(goal, kinds).classification
+
+
+def probe() -> str:
+    """Whether Jev can actually answer right now, for `aha doctor`.
+
+    Checked by asking, not by looking for a key: a typo'd key degrades to the
+    rules silently and correctly, which is exactly why it needs somewhere to be
+    visible.
+    """
+    try:
+        import typesafe_sdk  # noqa: F401
+    except ImportError:
+        return 'rules (add the jev group for TypeSafe)'
+    if not os.getenv('TYPESAFE_API_KEY'):
+        return 'rules (set TYPESAFE_API_KEY for TypeSafe)'
+
+    kinds = (TaskKind(name='yes', description='Anything at all.'),)
+    started = time.monotonic()
+    if _triage_with_jev('a test request', kinds) is None:
+        return 'rules (TypeSafe did not answer; check TYPESAFE_API_KEY)'
+    return f'jev ({(time.monotonic() - started) * 1000:.0f}ms), with rules as the fallback'
 
 
 def _triage_with_jev(goal: str, kinds: tuple[TaskKind, ...]) -> Triage | None:

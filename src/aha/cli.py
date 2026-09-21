@@ -27,7 +27,7 @@ from .fabric import (
     get,
     names,
 )
-from .fabric.classify import triage
+from .fabric.classify import probe, triage
 from .fabric.models import ENDPOINTS, describe
 from .fabric.runner import DEFAULT_JOURNAL
 
@@ -158,7 +158,7 @@ def doctor(
         table.add_row(f'{endpoint.prefix}*', base, endpoint.api_key_env, status)
     console.print(table)
 
-    console.print(f'\n[bold]triage[/] {_classifier()}')
+    console.print(f'\n[bold]triage[/] {probe()}')
     console.print('\n[dim]example[/] aha run "..." -m opencode-go/kimi-k3')
 
 
@@ -184,17 +184,6 @@ def list_runs(
         colour = 'green' if status == 'succeeded' else 'red'
         table.add_row(run_id, kind, branch or '-', autonomy, f'[{colour}]{status}[/]', f'{usd:.4f}', started)
     console.print(table)
-
-
-def _classifier() -> str:
-    """Whether Jev can answer, and if not, which half is missing."""
-    try:
-        import typesafe_sdk  # noqa: F401
-    except ImportError:
-        return 'rules (install the jev group for TypeSafe)'
-    if not os.getenv('TYPESAFE_API_KEY'):
-        return 'rules (set TYPESAFE_API_KEY for TypeSafe)'
-    return 'jev, with rules as the fallback'
 
 
 def _with_ceiling(policy: Policy, max_usd: float, min_clarity: float) -> Policy:
