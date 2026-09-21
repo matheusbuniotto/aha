@@ -50,6 +50,11 @@ every task against a frontier provider. The generic prefix covers anything else
 that speaks chat-completions: a self-hosted vLLM, a LiteLLM router, a Bedrock
 gateway.
 
+opencode Go routes on a stable per-conversation id, so the run id is sent as
+`x-opencode-session` along with an `aha/<version>` user agent. It also bills a
+flat subscription rather than per token, so `--max-usd` does not bind there --
+`Policy.max_steps` is the ceiling that does.
+
 ```bash
 export OPENCODE_API_KEY=...
 uv run aha doctor -m opencode-go/kimi-k3       # how it routes, what is missing
@@ -151,7 +156,8 @@ system prompt.
   | `autonomous` | high | a pre-authorisation rule -- `DenyUnattended` by default |
 
   Delegating a task to the cloud means writing down which risky tools are
-  allowed (`PreAuthorized.of('dbt_build')`), not removing the check.
+  allowed (`--allow dbt_build`, or `PreAuthorized.of('dbt_build')`), not
+  removing the check.
 - **Hard ceilings.** Per-run cost and request limits are enforced by the runtime.
 - **Independent verification.** The agent's own claim of success is ignored.
   `Pack.verify` runs real code -- for dbt, `dbt build` -- and that verdict decides

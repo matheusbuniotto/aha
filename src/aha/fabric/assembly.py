@@ -142,7 +142,7 @@ def build_agent(
             )
         )
     return Agent(
-        resolve_model(spec.model),
+        resolve_model(spec.model, session_id=journal.run_id if journal else None),
         name=spec.name,
         defer_model_check=True,
         instructions=PREAMBLE,

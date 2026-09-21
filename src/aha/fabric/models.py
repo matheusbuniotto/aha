@@ -12,8 +12,11 @@ agent can still be assembled and inspected without provider credentials.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version
 
+from openai import AsyncOpenAI
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -25,6 +28,16 @@ OPENCODE_API_KEY_ENV = 'OPENCODE_API_KEY'
 COMPATIBLE_PREFIX = 'openai-compatible/'
 COMPATIBLE_BASE_URL_ENV = 'AHA_OPENAI_BASE_URL'
 COMPATIBLE_API_KEY_ENV = 'AHA_OPENAI_API_KEY'
+
+SESSION_HEADER = 'x-opencode-session'
+
+
+def _user_agent() -> str:
+    """opencode Go asks clients to identify themselves rather than look like an SDK."""
+    try:
+        return f'aha/{version("aha")}'
+    except PackageNotFoundError:
+        return 'aha/0'
 
 
 class ModelConfigurationError(RuntimeError):
@@ -39,8 +52,15 @@ class Endpoint:
     base_url: str | None
     api_key_env: str
     base_url_env: str | None = None
+    session_header: str | None = None
+    """Header carrying a stable per-conversation id, when the endpoint routes on one."""
 
-    def resolve(self, model_name: str) -> Model:
+    def headers(self, session_id: str) -> dict[str, str] | None:
+        if self.session_header is None:
+            return None
+        return {self.session_header: session_id, 'User-Agent': _user_agent()}
+
+    def resolve(self, model_name: str, *, session_id: str) -> Model:
         base_url = self.base_url or os.getenv(self.base_url_env or '')
         if not base_url:
             raise ModelConfigurationError(
@@ -51,10 +71,18 @@ class Endpoint:
             raise ModelConfigurationError(
                 f'{self.prefix}{model_name} needs an API key. Set {self.api_key_env}.'
             )
-        return OpenAIChatModel(
-            model_name,
-            provider=OpenAIProvider(base_url=base_url, api_key=api_key),
-        )
+        headers = self.headers(session_id)
+        if headers is None:
+            provider = OpenAIProvider(base_url=base_url, api_key=api_key)
+        else:
+            provider = OpenAIProvider(
+                openai_client=AsyncOpenAI(
+                    base_url=base_url,
+                    api_key=api_key,
+                    default_headers=headers,
+                )
+            )
+        return OpenAIChatModel(model_name, provider=provider)
 
 
 ENDPOINTS = (
@@ -62,6 +90,7 @@ ENDPOINTS = (
         prefix=OPENCODE_PREFIX,
         base_url=OPENCODE_BASE_URL,
         api_key_env=OPENCODE_API_KEY_ENV,
+        session_header=SESSION_HEADER,
     ),
     Endpoint(
         prefix=COMPATIBLE_PREFIX,
@@ -72,15 +101,19 @@ ENDPOINTS = (
 )
 
 
-def resolve(model: str) -> Model | str:
+def resolve(model: str, *, session_id: str | None = None) -> Model | str:
     """Turn a model name into something `Agent` accepts.
 
     Known OpenAI-compatible prefixes become a configured `Model`; anything else
     is handed back as a string for Pydantic AI to infer at request time.
+
+    `session_id` should be stable for one conversation -- the run id is ideal.
+    Endpoints that route on it use it for prompt caching.
     """
+    session_id = session_id or uuid.uuid4().hex
     for endpoint in ENDPOINTS:
         if model.startswith(endpoint.prefix):
-            return endpoint.resolve(model.removeprefix(endpoint.prefix))
+            return endpoint.resolve(model.removeprefix(endpoint.prefix), session_id=session_id)
     return model
 
 

@@ -31,6 +31,7 @@ source = { editable = "." }
 dependencies = [
     { name = "pydantic-ai" },
     { name = "pydantic-ai-harness" },
+    { name = "python-dotenv" },
     { name = "typer" },
 ]
 
@@ -49,6 +50,7 @@ dev = [
 requires-dist = [
     { name = "pydantic-ai", specifier = ">=2.46.0" },
     { name = "pydantic-ai-harness", specifier = ">=0.32.0" },
+    { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "typer", specifier = ">=0.27.2" },
 ]
 

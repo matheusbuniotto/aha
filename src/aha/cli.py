@@ -10,14 +10,19 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
 from . import packs  # noqa: F401 - registers the built-in packs
-from .fabric import Autonomy, LocalRunner, TaskSpec, get, names
+from .fabric import Autonomy, LocalRunner, PreAuthorized, TaskSpec, get, names
 from .fabric.classify import classify
 from .fabric.models import ENDPOINTS, describe
 from .fabric.runner import DEFAULT_JOURNAL
+
+load_dotenv()
+
+DEFAULT_MODEL = os.getenv('AHA_MODEL') or 'anthropic:claude-sonnet-4-6'
 
 app = typer.Typer(add_completion=False, help='Run supervised agent tasks over a workspace.')
 console = Console()
@@ -32,10 +37,14 @@ def run(
     model: Annotated[
         str,
         typer.Option('--model', '-m', help='Provider model, or opencode-go/<id>, or openai-compatible/<id>.'),
-    ] = 'anthropic:claude-sonnet-4-6',
+    ] = DEFAULT_MODEL,
     name: Annotated[str, typer.Option('--name', help='Slug recorded in the journal.')] = 'task',
     journal: Annotated[Path, typer.Option('--journal', help='Where the audit trail is kept.')] = DEFAULT_JOURNAL,
     max_usd: Annotated[float, typer.Option('--max-usd', help='Hard spend ceiling for this run.')] = 2.0,
+    allow: Annotated[
+        list[str] | None,
+        typer.Option('--allow', help='Pre-authorise a gated tool, repeatable. Needed to run unattended.'),
+    ] = None,
 ) -> None:
     """Run one task end to end and report whether it actually landed."""
     domain = get(pack)
@@ -52,7 +61,11 @@ def run(
     console.print(f'[bold]{spec.name}[/] · pack [cyan]{pack}[/] · autonomy [yellow]{autonomy}[/]')
     console.print(f'workspace [dim]{spec.resolved_workspace}[/]\n')
 
-    outcome = asyncio.run(LocalRunner(journal_path=journal).run(spec))
+    approver = PreAuthorized.of(*allow) if allow else None
+    if allow:
+        console.print(f'pre-authorised [magenta]{", ".join(allow)}[/]\n')
+
+    outcome = asyncio.run(LocalRunner(approver=approver, journal_path=journal).run(spec))
     _report(outcome)
     raise typer.Exit(0 if outcome.ok else 1)
 
@@ -80,7 +93,7 @@ def classify_goal(
 
 @app.command('doctor')
 def doctor(
-    model: Annotated[str, typer.Option('--model', '-m')] = 'anthropic:claude-sonnet-4-6',
+    model: Annotated[str, typer.Option('--model', '-m')] = DEFAULT_MODEL,
 ) -> None:
     """Show how a model name routes and which provider credentials are present."""
     console.print(f'[bold]model[/]  {describe(model)}\n')
@@ -90,9 +103,9 @@ def doctor(
         table.add_column(column)
     for endpoint in ENDPOINTS:
         base = endpoint.base_url or f'${endpoint.base_url_env}'
-        ready = os.getenv(endpoint.api_key_env) is not None
+        ready = bool(os.getenv(endpoint.api_key_env))
         if endpoint.base_url is None:
-            ready = ready and os.getenv(endpoint.base_url_env or '') is not None
+            ready = ready and bool(os.getenv(endpoint.base_url_env or ''))
         status = '[green]ready[/]' if ready else '[yellow]not configured[/]'
         table.add_row(f'{endpoint.prefix}*', base, endpoint.api_key_env, status)
     console.print(table)
