@@ -27,7 +27,7 @@ from .fabric import (
     get,
     names,
 )
-from .fabric.classify import classify
+from .fabric.classify import triage
 from .fabric.models import ENDPOINTS, describe
 from .fabric.runner import DEFAULT_JOURNAL
 
@@ -66,6 +66,10 @@ def run(
     quiet: Annotated[bool, typer.Option('--quiet', '-q', help='Only print the final report.')] = False,
     journal: Annotated[Path, typer.Option('--journal', help='Where the audit trail is kept.')] = DEFAULT_JOURNAL,
     max_usd: Annotated[float, typer.Option('--max-usd', help='Hard spend ceiling for this run.')] = 2.0,
+    min_clarity: Annotated[
+        float,
+        typer.Option('--min-clarity', help='Refuse an unattended run this unclear. 0 never refuses.'),
+    ] = 0.0,
     allow: Annotated[
         list[str] | None,
         typer.Option('--allow', help='Pre-authorise a gated tool, repeatable. Needed to run unattended.'),
@@ -83,7 +87,7 @@ def run(
         pull_request=pr,
         autonomy=autonomy,
         model=model,
-        policy=_with_ceiling(domain.policy(), max_usd),
+        policy=_with_ceiling(domain.policy(), max_usd, min_clarity),
     )
 
     console.print(f'[bold]{spec.name}[/] · pack [cyan]{pack}[/] · autonomy [yellow]{autonomy}[/]')
@@ -115,10 +119,12 @@ def classify_goal(
     goal: str,
     pack: Annotated[str, typer.Option('--pack', '-p')] = 'dbt',
 ) -> None:
-    """Show how a request would be classified, without running anything."""
-    verdict = classify(goal, get(pack).kinds())
-    flag = ' [yellow](uncertain)[/]' if verdict.uncertain else ''
+    """Show how a request would be judged, without running anything."""
+    verdict = triage(goal, get(pack).kinds())
+    flag = ' [yellow](uncertain)[/]' if verdict.classification.uncertain else ''
     console.print(f'{verdict}{flag}')
+    for note in verdict.adjustments():
+        console.print(f'  [yellow]·[/] {note}')
 
 
 @app.command('explore')
@@ -152,6 +158,7 @@ def doctor(
         table.add_row(f'{endpoint.prefix}*', base, endpoint.api_key_env, status)
     console.print(table)
 
+    console.print(f'\n[bold]triage[/] {_classifier()}')
     console.print('\n[dim]example[/] aha run "..." -m opencode-go/kimi-k3')
 
 
@@ -179,8 +186,19 @@ def list_runs(
     console.print(table)
 
 
-def _with_ceiling(policy: Policy, max_usd: float) -> Policy:
-    return replace(policy, max_usd=max_usd)
+def _classifier() -> str:
+    """Whether Jev can answer, and if not, which half is missing."""
+    try:
+        import typesafe_sdk  # noqa: F401
+    except ImportError:
+        return 'rules (install the jev group for TypeSafe)'
+    if not os.getenv('TYPESAFE_API_KEY'):
+        return 'rules (set TYPESAFE_API_KEY for TypeSafe)'
+    return 'jev, with rules as the fallback'
+
+
+def _with_ceiling(policy: Policy, max_usd: float, min_clarity: float) -> Policy:
+    return replace(policy, max_usd=max_usd, min_clarity=min_clarity)
 
 
 def _report(outcome) -> None:

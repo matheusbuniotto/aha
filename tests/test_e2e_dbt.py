@@ -93,7 +93,7 @@ async def test_supervised_run_builds_and_verifies(project: Path, tmp_path: Path)
     assert (project / 'models/staging/stg_orders.sql').exists()
 
     kinds = [kind for _, kind, _ in _journal_events(runner, outcome)]
-    assert 'classified' in kinds
+    assert 'triaged' in kinds
     assert 'tool_approved' in kinds
     assert 'verified' in kinds
 

@@ -18,10 +18,10 @@ That's it. The rest of this file is detail you can read when you need it.
 ## What a run does
 
 ```
-classify ─▶ branch ─▶ explore ─▶ agent works ─▶ verify ─▶ (optional) PR
+triage ─▶ branch ─▶ explore ─▶ agent works ─▶ verify ─▶ (optional) PR
 ```
 
-1. **classify** — what kind of task is this? Decides instructions and risk posture. Free, offline, no frontier model call. See [Classification](#classification).
+1. **triage** — what kind of task, how big, how destructive, how clear? Sets the instructions and tightens the policy. Cheap, and no frontier model. See [Triage](#triage-were-trialling-jev).
 2. **branch** — switches to `aha/TASK-12`. One ticket, one diff, easy to throw away.
 3. **explore** — reads dbt's manifest and works out which tables you probably mean, and what feeds them. So the model doesn't invent a `ref()`.
 4. **work** — the agent edits files and runs dbt. Risky calls stop and ask you.
@@ -30,36 +30,59 @@ classify ─▶ branch ─▶ explore ─▶ agent works ─▶ verify ─▶ (o
 
 Everything lands in a SQLite journal: `uv run aha runs`.
 
-## Classification
+## Triage (we're trialling Jev)
 
-Routing the request is a small, typed judgment, so it shouldn't need a big model.
-We're **trialling [TypeSafe's Jev](https://docs.typesafe.ai)** for it:
+Four questions get answered before the expensive model is woken up, because each
+one changes what it's allowed to do. [TypeSafe's Jev](https://docs.typesafe.ai)
+answers all four in a single typed call:
 
 ```bash
 uv sync --group jev        # + TYPESAFE_API_KEY in .env
 ```
 
-The request becomes a `Choice` over the pack's task kinds and comes back with a
-confidence. No key, no SDK, or a failed call — a keyword rule answers instead
-and the run carries on regardless. Either way you get a confidence and a source,
-and both go in the journal, which is how we're comparing them:
+| judgment | question | what it changes |
+|---|---|---|
+| **kind** | which task is this? | instructions + default risk posture |
+| **size** | how much work? | small tasks get a shorter step budget |
+| **caution** | how bad if it's wrong? | destructive work gates file edits too |
+| **clarity** | specific enough to act on? | a warning, and an opt-in refusal gate |
 
 ```bash
-$ uv run aha classify "the customers mart is showing duplicate rows"
-bug_fix (0.95 via jev)          # rules: bug_fix (0.60) — right, but unsure
+$ uv run aha classify "drop and rebuild every mart with a full refresh"
+model_build (0.99 via jev) · size 0.97 · caution 0.90 · clarity 0.22
+  · looks destructive (0.90): every file edit now needs approval too
+  · looks vague (0.22): expect to be asked what you meant
 
-$ uv run aha classify "how many customers churned last month"
-analysis (1.00 via jev)
-
-$ uv run aha classify "make it better"
-model_build (0.51 via jev) (uncertain)
+$ uv run aha classify "add a not_null test to stg_orders.order_id"
+test_coverage (1.00 via jev) · size 0.01 · caution 0.03 · clarity 0.68
+  · looks small (0.01): step budget cut to 20
 ```
 
-Where it earns its place so far: the rules get short, keyword-shaped dbt
-requests right, but their confidence is noise — a number derived from how many
-words happened to match. Jev's is calibrated, so a vague request actually reads
-as vague (that 0.51), and `uncertain` becomes something you could route on
-instead of a decoration.
+Read clarity as *"how much back and forth should I expect"*, not as a grade.
+Jev is asked whether an engineer could act without asking a question first,
+which is a high bar: `"build a daily revenue mart from stg_orders and
+stg_customers"` — a perfectly good ticket — scores **0.16**. So nothing is
+refused on clarity unless you ask for it:
+
+```bash
+uv run aha run "..." -a autonomous --min-clarity 0.3   # off by default
+```
+
+**Every adjustment is one-directional.** Jev can narrow the blast radius or
+shorten the leash; it can never widen either. A destructive-looking request
+raises `mutate` tools to `high` — reusing the gate you already have instead of
+inventing a second one — and reads are never escalated. A big task doesn't earn
+a bigger budget: ceilings are yours to grant.
+
+No key, no SDK, or a failed call? A keyword rule answers `kind` and the other
+three stay unknown, where **unknown means no adjustment**. A missing classifier
+can't tighten or loosen anything. `uv run aha doctor` says which one you've got.
+
+Worth knowing: the keyword rules get short dbt requests right about as often,
+but their confidence is an artifact of how many words matched. Jev's is
+calibrated — which is what makes it safe to wire into policy at all.
+
+## Commands
 
 ## Commands
 
@@ -68,7 +91,7 @@ instead of a decoration.
 ```bash
 uv run aha run "..." -w path [-t TASK-12] [-a supervised|guarded|autonomous] [--pr]
 uv run aha explore "why is revenue wrong?"   # tables + lineage it would start from
-uv run aha classify "why is revenue wrong?"  # how it'd route the request
+uv run aha classify "why is revenue wrong?"  # how it'd route + judge the request
 uv run aha packs                             # what it knows how to be asked
 uv run aha doctor                            # which models/keys are wired up
 uv run aha runs                              # history

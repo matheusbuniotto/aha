@@ -65,8 +65,26 @@ class Policy:
     command_timeout_s: float = 300.0
     """Wall clock limit for a single shell command."""
 
+    min_clarity: float = 0.0
+    """Refuse an unattended run whose request scores below this. Off by default.
+
+    Opt-in because the cost of a false positive lands on the person who wrote a
+    perfectly good request and got told no. Turn it on once you have seen what
+    your team's requests actually score.
+    """
+
     def risk_of(self, tool_name: str) -> Risk:
         return self.risks.get(tool_name, Risk.read)
+
+    def gating_mutations(self) -> Policy:
+        """Raise every mutating tool to high risk.
+
+        Escalation only: reads stay reads, and a tool already high stays high.
+        Used when a request looks destructive, so the existing gate catches more
+        rather than a second kind of gate appearing beside it.
+        """
+        raised = {name: Risk.high if risk is Risk.mutate else risk for name, risk in self.risks.items()}
+        return replace(self, risks=raised)
 
     def needs_approval(self, tool_name: str, autonomy: Autonomy) -> bool:
         """Whether this call needs a decision before it runs.

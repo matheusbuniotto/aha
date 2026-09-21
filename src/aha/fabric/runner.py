@@ -17,13 +17,13 @@ from . import pack as packs
 from .approvals import Approver, default_approver
 from .assembly import build_agent, usage_limits
 from .branching import Branch, ensure_branch
-from .classify import Classification, classify
+from .classify import Classification, Triage, triage
 from .journal import Journal
 from .pack import Pack, Verification
 from .progress import NullReporter, Reporter
 from .publish import PullRequest, publish, summary
 from .recorder import Recorder
-from .spec import TaskSpec
+from .spec import Autonomy, TaskSpec
 
 DEFAULT_JOURNAL = Path('.aha/journal.db')
 
@@ -34,7 +34,7 @@ class RunOutcome:
 
     run_id: str
     spec: TaskSpec
-    classification: Classification
+    triage: Triage
     output: str
     verification: Verification
     usd: float
@@ -48,6 +48,10 @@ class RunOutcome:
     @property
     def ok(self) -> bool:
         return self.status == 'succeeded' and self.verification.passed
+
+    @property
+    def classification(self) -> Classification:
+        return self.triage.classification
 
 
 @dataclass
@@ -79,14 +83,27 @@ class LocalRunner:
 
     async def run(self, spec: TaskSpec, /) -> RunOutcome:
         pack = packs.get(spec.pack)
-        verdict = classify(spec.goal, pack.kinds())
-        spec = spec.with_kind(verdict.kind)
+        verdict = triage(spec.goal, pack.kinds())
+        spec = verdict.applied_to(spec)
 
         journal = Journal.open(self.journal_path, spec=spec)
-        journal.record('classified', kind=verdict.kind, confidence=verdict.confidence, source=verdict.source)
-        self.reporter.phase(
-            'task', f'{journal.run_id} · {verdict.kind} ({verdict.confidence:.2f} via {verdict.source})'
+        journal.record(
+            'triaged',
+            kind=verdict.classification.kind,
+            confidence=verdict.classification.confidence,
+            size=verdict.size,
+            caution=verdict.caution,
+            clarity=verdict.clarity,
+            source=verdict.source,
+            max_steps=spec.policy.max_steps,
         )
+        self.reporter.phase('task', f'{journal.run_id} · {verdict}')
+
+        for note in verdict.adjustments():
+            self.reporter.phase('policy', note)
+
+        if refusal := self._refuse(spec, verdict, journal):
+            return refusal
 
         recorder = Recorder(journal=journal, reporter=self.reporter)
         attempt = await self._attempt(spec, pack, journal, recorder)
@@ -102,13 +119,41 @@ class LocalRunner:
         return RunOutcome(
             run_id=journal.run_id,
             spec=spec,
-            classification=verdict,
+            triage=verdict,
             output=attempt.output,
             verification=verification,
             usd=attempt.usd,
             status=attempt.status,
             branch=attempt.branch.name if attempt.branch else None,
             pull_request=pull_request,
+        )
+
+    def _refuse(self, spec: TaskSpec, verdict: Triage, journal: Journal) -> RunOutcome | None:
+        """Stop an unattended run the human said was too unclear to be worth starting.
+
+        Off unless `Policy.min_clarity` is set. With a person at the terminal a
+        vague goal costs a conversation; with nobody watching it costs a branch
+        full of confident guesses -- but refusing good work is worse than either,
+        so the threshold is the human's to choose.
+        """
+        if not (verdict.too_vague_for(spec.policy) and spec.autonomy is Autonomy.autonomous):
+            return None
+
+        detail = (
+            f'clarity {verdict.clarity:.2f} is below the {spec.policy.min_clarity:.2f} this run required; '
+            'name the models or columns you mean, or run it supervised'
+        )
+        journal.record('refused', reason=detail)
+        journal.finish(status='refused', detail=detail)
+        self.reporter.phase('refused', detail)
+        return RunOutcome(
+            run_id=journal.run_id,
+            spec=spec,
+            triage=verdict,
+            output=detail,
+            verification=Verification(passed=False, detail='not run'),
+            usd=0.0,
+            status='refused',
         )
 
     async def _attempt(self, spec: TaskSpec, pack: Pack, journal: Journal, recorder: Recorder) -> _Attempt:

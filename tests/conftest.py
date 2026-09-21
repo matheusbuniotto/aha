@@ -19,3 +19,9 @@ def project(tmp_path: Path) -> Path:
 @pytest.fixture
 def anyio_backend() -> str:
     return 'asyncio'
+
+
+@pytest.fixture(autouse=True)
+def offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reaches TypeSafe. The rules path is the one that must stay deterministic."""
+    monkeypatch.delenv('TYPESAFE_API_KEY', raising=False)

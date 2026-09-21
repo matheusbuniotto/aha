@@ -1,14 +1,14 @@
 # Run `make` to see what is available.
 
-DBT      := uv run --group dbt
-DEV      := uv run --group dbt --group dev
-DEMO     := /tmp/aha-demo
+DBT      := uv run --group dbt --group jev
+DEV      := uv run --group dbt --group dev --group jev
+TASK     ?= TASK-1
+DEMO     := /tmp/aha-demo-$(TASK)
 PROJECT  := examples/jaffle
 JOURNAL  ?= .aha/journal.db
 GOAL     ?= add a staging model for raw orders, with a uniqueness test on its key
 WORKSPACE?= $(DEMO)
 ALLOW    ?= --allow dbt_build --allow dbt_seed
-TASK     ?= TASK-1
 
 .DEFAULT_GOAL := help
 .PHONY: help install check test test-unit lint format doctor packs skills classify \
