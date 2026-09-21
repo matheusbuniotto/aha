@@ -17,12 +17,14 @@ from . import pack as packs
 from .approvals import Approver, default_approver
 from .assembly import build_agent, usage_limits
 from .branching import Branch, ensure_branch
+from .checks import Check, CheckResult, load_checks, run_checks, summarise
 from .classify import Classification, Triage, triage
 from .journal import Journal
 from .pack import Pack, Verification
 from .progress import NullReporter, Reporter
 from .publish import PullRequest, publish, summary
 from .recorder import Recorder
+from .review import Review, diff_of, run_review
 from .spec import Autonomy, TaskSpec
 
 DEFAULT_JOURNAL = Path('.aha/journal.db')
@@ -41,6 +43,12 @@ class RunOutcome:
     status: str
     branch: str | None = None
     """The branch the work landed on, or None when the workspace is not a repo."""
+
+    checks: tuple[CheckResult, ...] = ()
+    """How the team's own linters judged it, alongside the pack's verdict."""
+
+    review: Review | None = None
+    """What the reviewing agent concluded, when one was asked."""
 
     pull_request: PullRequest | None = None
     """Set when `--pr` was asked for; carries the url or why there is none."""
@@ -99,6 +107,8 @@ class LocalRunner:
         )
         self.reporter.phase('task', f'{journal.run_id} · {verdict}')
 
+        checks = self._checks(spec, journal)
+
         for note in verdict.adjustments():
             self.reporter.phase('policy', note)
 
@@ -106,14 +116,34 @@ class LocalRunner:
             return refusal
 
         recorder = Recorder(journal=journal, reporter=self.reporter)
-        attempt = await self._attempt(spec, pack, journal, recorder)
+        attempt = await self._attempt(spec, pack, journal, recorder, decompose=verdict.big)
+        if verdict.big and not recorder.counts.get('write_plan'):
+            journal.record('plan_skipped')
+            self.reporter.phase('note', 'a large task ran without writing a plan')
 
         self.reporter.phase('verify', 'checking the work independently of what the model claims')
         verification = pack.verify(spec)
         journal.record('verified', passed=verification.passed, detail=verification.detail)
 
+        results = run_checks(spec.resolved_workspace, checks)
+        for result in results:
+            journal.record('checked', check=result.check.name, passed=result.passed)
+            self.reporter.phase('check', str(result))
+        verification = _combined(verification, results)
+
+        review = None
+        if spec.review and attempt.status == 'succeeded':
+            attempt, verification, results, review = await self._reviewed(
+                spec, pack, journal, recorder, attempt, verification, results, checks
+            )
+
         landed = attempt.status == 'succeeded' and verification.passed
-        pull_request = self._publish(spec, journal, attempt.branch, verification, recorder.counts) if landed else None
+        approved = review is None or review.approved
+        pull_request = (
+            self._publish(spec, journal, attempt.branch, verification, recorder.counts) if landed and approved else None
+        )
+        if landed and not approved:
+            journal.record('publish_skipped', reason='the reviewer asked for changes')
         journal.finish(status=attempt.status, usd=attempt.usd, detail=verification.detail)
 
         return RunOutcome(
@@ -125,8 +155,69 @@ class LocalRunner:
             usd=attempt.usd,
             status=attempt.status,
             branch=attempt.branch.name if attempt.branch else None,
+            checks=results,
+            review=review,
             pull_request=pull_request,
         )
+
+    async def _reviewed(
+        self,
+        spec: TaskSpec,
+        pack: Pack,
+        journal: Journal,
+        recorder: Recorder,
+        attempt: _Attempt,
+        verification: Verification,
+        results: tuple[CheckResult, ...],
+        checks: tuple[Check, ...],
+    ) -> tuple[_Attempt, Verification, tuple[CheckResult, ...], Review]:
+        """Read the whole change, then give the implementer its notes back.
+
+        Bounded on purpose: two agents can disagree forever, and a reviewer that
+        cannot be satisfied is a reviewer a person has to overrule anyway.
+        """
+        rounds = spec.review_rounds
+        while True:
+            self.reporter.phase('review', 'a second agent is reading the diff')
+            review = await run_review(
+                spec,
+                diff=diff_of(spec.resolved_workspace, attempt.branch),
+                checks=summarise(results),
+                model_override=self.model_override,
+            )
+            journal.record(
+                'reviewed',
+                approved=review.approved,
+                summary=review.summary,
+                changes=list(review.changes),
+            )
+            self.reporter.phase('review', str(review))
+
+            if not review.blocking or rounds <= 0:
+                return attempt, verification, results, review
+
+            rounds -= 1
+            self.reporter.phase('revise', f'{len(review.changes)} change(s) requested')
+            journal.record('revising', remaining=rounds)
+            attempt = await self._attempt(
+                spec,
+                pack,
+                journal,
+                recorder,
+                feedback=review.as_feedback(),
+                pass_number=spec.review_rounds - rounds + 1,
+            )
+            verification = pack.verify(spec)
+            results = run_checks(spec.resolved_workspace, checks)
+            verification = _combined(verification, results)
+
+    def _checks(self, spec: TaskSpec, journal: Journal) -> tuple[Check, ...]:
+        """Pin the check list before the agent can edit the file that declares it."""
+        checks = load_checks(spec.resolved_workspace) + tuple(Check.of(f'cli{i}', c) for i, c in enumerate(spec.checks))
+        if checks:
+            journal.record('checks', commands=[str(check) for check in checks])
+            self.reporter.phase('checks', '\n'.join(str(check) for check in checks))
+        return checks
 
     def _refuse(self, spec: TaskSpec, verdict: Triage, journal: Journal) -> RunOutcome | None:
         """Stop an unattended run the human said was too unclear to be worth starting.
@@ -156,7 +247,17 @@ class LocalRunner:
             status='refused',
         )
 
-    async def _attempt(self, spec: TaskSpec, pack: Pack, journal: Journal, recorder: Recorder) -> _Attempt:
+    async def _attempt(
+        self,
+        spec: TaskSpec,
+        pack: Pack,
+        journal: Journal,
+        recorder: Recorder,
+        *,
+        decompose: bool = False,
+        feedback: str | None = None,
+        pass_number: int = 1,
+    ) -> _Attempt:
         """Everything that can go wrong, in one place, so every failure is journalled.
 
         Branching and exploration live in here with the model call for that
@@ -166,13 +267,15 @@ class LocalRunner:
         attempt = _Attempt()
         try:
             attempt.branch = self._branch(spec, journal)
-            prompt = self._brief(spec, pack, journal)
+            prompt = feedback or self._brief(spec, pack, journal)
             agent = build_agent(
                 spec,
                 pack,
                 approver=self.approver or default_approver(spec.autonomy),
                 journal=journal,
                 recorder=recorder,
+                decompose=decompose,
+                pass_number=pass_number,
                 steps_db=self.journal_path.with_name('steps.db'),
             )
             self.reporter.phase('working', spec.goal)
@@ -247,6 +350,14 @@ class _nothing:
     def __enter__(self) -> None: ...
 
     def __exit__(self, *exc: Any) -> None: ...
+
+
+def _combined(verification: Verification, results: tuple[CheckResult, ...]) -> Verification:
+    """One verdict from the pack's own check and the team's."""
+    if not results:
+        return verification
+    detail = '\n'.join(part for part in (verification.detail, summarise(results)) if part)
+    return Verification(passed=verification.passed and all(r.passed for r in results), detail=detail)
 
 
 def _cost_of(result: Any) -> float:

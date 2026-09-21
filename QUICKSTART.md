@@ -75,6 +75,25 @@ uv run aha run "add not_null tests to every staging key" \
 Anything risky that you did *not* name gets refused, and the refusal is in the
 journal. `--pr` opens a pull request if, and only if, the run verified.
 
+## 5. Make it stricter
+
+Three optional knobs, in the order most teams want them:
+
+```bash
+# your linters have to pass too -- put this in the project root as aha.toml
+[checks]
+sqlfluff = "sqlfluff lint models --dialect duckdb"
+```
+
+```bash
+uv run aha run "..." --review        # a second agent reads the diff first
+uv run aha run "..." --check "dbt test --select state:modified"   # one-off check
+```
+
+A failing check fails the run. A reviewer that asks for changes sends them back
+to the implementing agent for one more pass, and blocks the PR until it's happy
+or out of rounds.
+
 ## Gotchas
 
 **`Could not find profile`** — aha runs dbt with `--profiles-dir` set to the

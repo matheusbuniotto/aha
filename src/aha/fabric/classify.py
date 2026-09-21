@@ -34,6 +34,7 @@ ASSUMED_CLEAR = 1.0
 """Unknown clarity. Only Jev can call a request vague; silence never blocks a run."""
 
 SMALL = 0.25
+LARGE = 0.6
 DESTRUCTIVE = 0.66
 
 VAGUE = 0.2
@@ -94,6 +95,11 @@ class Triage:
     source: str = 'rules'
 
     @property
+    def big(self) -> bool:
+        """Big enough that starting to edit files before planning is a mistake."""
+        return self.size >= LARGE
+
+    @property
     def vague(self) -> bool:
         """Worth mentioning. Not, by itself, worth stopping for."""
         return self.clarity < VAGUE
@@ -124,6 +130,8 @@ class Triage:
             notes.append(f'looks destructive ({self.caution:.2f}): every file edit now needs approval too')
         if self.size <= SMALL:
             notes.append(f'looks small ({self.size:.2f}): step budget cut to {SMALL_TASK_STEPS}')
+        if self.big:
+            notes.append(f'looks large ({self.size:.2f}): a task list comes before any edit')
         if self.vague:
             notes.append(f'looks vague ({self.clarity:.2f}): expect some back and forth')
         return tuple(notes)

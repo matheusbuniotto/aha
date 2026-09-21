@@ -131,6 +131,15 @@ class TaskSpec:
     branch: bool = True
     """Whether to isolate the run on its own git branch."""
 
+    checks: tuple[str, ...] = ()
+    """Extra commands the work must pass, on top of the workspace's `aha.toml`."""
+
+    review: bool = False
+    """Have a second agent read the whole diff before a person is asked to."""
+
+    review_rounds: int = 1
+    """How many times the implementing agent may answer the reviewer's notes."""
+
     pull_request: bool = False
     """Open a pull request when the run verifies. The review gate, not a tool gate."""
 

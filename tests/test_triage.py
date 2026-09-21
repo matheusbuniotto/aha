@@ -137,3 +137,34 @@ async def test_a_vague_request_still_runs_when_someone_is_watching(tmp_path: Pat
     outcome = await runner.run(replace(spec, policy=replace(spec.policy, min_clarity=0.3)))
 
     assert outcome.status == 'succeeded'
+
+
+def test_a_big_task_is_told_to_plan_first() -> None:
+    from aha.fabric.assembly import planning_capabilities
+
+    assert [c.id for c in planning_capabilities(decompose=True)] == ['planning', 'plan_first']
+    assert [c.id for c in planning_capabilities(decompose=False)] == ['planning']
+
+
+@pytest.mark.anyio
+async def test_a_big_task_that_skips_the_plan_is_recorded(tmp_path: Path, monkeypatch) -> None:
+    """Not a failure -- but a reviewer should know the work was never broken down."""
+    from aha.fabric import AlwaysApprove
+    from aha.fabric.journal import Journal
+
+    workspace = tmp_path / 'work'
+    workspace.mkdir()
+    monkeypatch.setattr(
+        'aha.fabric.runner.triage',
+        lambda goal, kinds: Triage(classification=CERTAIN, size=0.9, source='jev'),
+    )
+    runner = LocalRunner(
+        approver=AlwaysApprove(),
+        journal_path=tmp_path / 'journal.db',
+        model_override=Script(turns=[[call('write_file', path='a.md', content='hi')], 'Done.']).as_model(),
+    )
+
+    outcome = await runner.run(TaskSpec(name='t', goal='refactor everything', workspace=workspace, pack='generic'))
+
+    kinds = [kind for _, kind, _ in Journal(path=runner.journal_path, run_id=outcome.run_id).events()]
+    assert 'plan_skipped' in kinds

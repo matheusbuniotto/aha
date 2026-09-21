@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic_ai import Agent
-from pydantic_ai.capabilities import AgentCapability
+from pydantic_ai.capabilities import AgentCapability, Capability
 from pydantic_ai.usage import UsageLimits
 from pydantic_ai_harness import (
     ClearToolResults,
@@ -88,6 +88,22 @@ def _team_skills(spec: TaskSpec) -> Path | None:
     return path if path.is_dir() else None
 
 
+PLAN_FIRST = """\
+This request is large enough that working through it in your head will lose
+parts of it. Before you edit anything:
+- Call `write_plan` with one step per piece of work, each verifiable on its own.
+- Work the steps in order, marking each finished as you go.
+- If the plan turns out to be wrong, rewrite it rather than abandoning it.
+The plan is what a reviewer reads to see whether anything was dropped."""
+
+
+def planning_capabilities(*, decompose: bool) -> list[AgentCapability[None]]:
+    """Planning is always available; a big task is also told to use it."""
+    if not decompose:
+        return [Planning()]
+    return [Planning(), Capability(id='plan_first', instructions=PLAN_FIRST)]
+
+
 def context_capabilities() -> list[AgentCapability[None]]:
     """Keeping a long run inside the context window without losing the thread."""
     return [
@@ -99,7 +115,6 @@ def context_capabilities() -> list[AgentCapability[None]]:
             ],
             target_fraction=0.5,
         ),
-        Planning(),
     ]
 
 
@@ -110,6 +125,8 @@ def build_agent(
     approver: Approver,
     journal: Journal | None = None,
     recorder: Recorder | None = None,
+    decompose: bool = False,
+    pass_number: int = 1,
     steps_db: Path | None = None,
     extra: list[AgentCapability[None]] | None = None,
 ) -> Agent[None, str]:
@@ -119,12 +136,17 @@ def build_agent(
     without provider credentials present. Passing `steps_db` snapshots each step
     so a run can be resumed or forked later -- the seam a queue-driven cloud
     runner needs, without changing anything about how a task is defined.
+
+    `pass_number` distinguishes a revision from the original attempt: step ids
+    are single-shot, and answering a reviewer is a second pass over the same
+    task rather than a second task.
     """
     capabilities: list[AgentCapability[None]] = [
         *workspace_capabilities(spec),
         *pack.capabilities(spec),
         *skill_capabilities(spec, pack),
         *context_capabilities(),
+        *planning_capabilities(decompose=decompose),
         recorder or Recorder(journal=journal),
         approval_gate(
             policy=spec.policy,
@@ -139,7 +161,8 @@ def build_agent(
             StepPersistence(
                 store=SqliteStepStore(database=steps_db),
                 agent_name=spec.name,
-                run_id=journal.run_id if journal else None,
+                run_id=f'{journal.run_id}#{pass_number}' if journal else None,
+                parent_run_id=f'{journal.run_id}#{pass_number - 1}' if journal and pass_number > 1 else None,
             )
         )
     return Agent(

@@ -11,6 +11,7 @@ JOURNAL  ?= .aha/journal.db
 GOAL     ?= add a staging model for raw orders, with a uniqueness test on its key
 WORKSPACE?= $(DEMO)
 ALLOW    ?= --allow dbt_build --allow dbt_seed
+REVIEW   ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help install check test test-unit lint format doctor packs skills classify \
@@ -65,8 +66,8 @@ reset-demo: ## Copy the example dbt project to a clean scratch workspace
 		commit -qm "jaffle before the agent"
 	@echo "clean project at $(DEMO), on main"
 
-demo: reset-demo ## Unattended run on a scratch project. Override GOAL="..." TASK=...
-	PYDANTIC_AI_NO_BANNER=1 $(DBT) aha run "$(GOAL)" -t $(TASK) \
+demo: reset-demo ## Unattended run on a scratch project. GOAL=".." TASK=.. REVIEW=1
+	PYDANTIC_AI_NO_BANNER=1 $(DBT) aha run "$(GOAL)" -t $(TASK) $(if $(REVIEW),--review) \
 		-w $(WORKSPACE) -a autonomous $(ALLOW) --journal $(DEMO)/.aha/journal.db
 
 demo-supervised: reset-demo ## Same run, approving each risky call at the terminal

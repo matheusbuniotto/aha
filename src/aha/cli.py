@@ -62,6 +62,7 @@ def run(
         typer.Option('--task-id', '-t', help='Ticket this run belongs to, such as TASK-12. Names the branch.'),
     ] = None,
     branch: Annotated[bool, typer.Option('--branch/--no-branch', help='Isolate the run on its own git branch.')] = True,
+    review: Annotated[bool, typer.Option('--review', help='Have a second agent read the diff before you do.')] = False,
     pr: Annotated[bool, typer.Option('--pr', help='Open a pull request when the run verifies.')] = False,
     quiet: Annotated[bool, typer.Option('--quiet', '-q', help='Only print the final report.')] = False,
     journal: Annotated[Path, typer.Option('--journal', help='Where the audit trail is kept.')] = DEFAULT_JOURNAL,
@@ -70,6 +71,10 @@ def run(
         float,
         typer.Option('--min-clarity', help='Refuse an unattended run this unclear. 0 never refuses.'),
     ] = 0.0,
+    check: Annotated[
+        list[str] | None,
+        typer.Option('--check', help='Extra command the work must pass, repeatable.'),
+    ] = None,
     allow: Annotated[
         list[str] | None,
         typer.Option('--allow', help='Pre-authorise a gated tool, repeatable. Needed to run unattended.'),
@@ -84,6 +89,8 @@ def run(
         pack=pack,
         task_id=task_id,
         branch=branch,
+        checks=tuple(check or ()),
+        review=review,
         pull_request=pr,
         autonomy=autonomy,
         model=model,
@@ -196,6 +203,10 @@ def _report(outcome) -> None:
     console.print(f'[dim]status[/] {outcome.status} · [dim]cost[/] ${outcome.usd:.4f}')
     if outcome.branch:
         console.print(f'[dim]branch[/] {outcome.branch}')
+    if outcome.review:
+        console.print(f'[dim]review[/] {outcome.review}')
+        for change in outcome.review.changes:
+            console.print(f'  [yellow]·[/] {change}')
     if outcome.pull_request:
         console.print(f'[dim]pr[/] {outcome.pull_request.url or outcome.pull_request.detail}')
 

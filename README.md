@@ -19,15 +19,16 @@ run in five minutes. The rest of this file is detail for when you need it.
 ## What a run does
 
 ```
-triage ─▶ branch ─▶ explore ─▶ agent works ─▶ verify ─▶ (optional) PR
+triage ─▶ branch ─▶ explore ─▶ agent works ─▶ verify + check ─▶ review ─▶ PR
 ```
 
 1. **triage** — what kind of task, how big, how destructive, how clear? Sets the instructions and tightens the policy. Cheap, and no frontier model. See [Triage](#triage-were-trialling-jev).
 2. **branch** — switches to `aha/TASK-12`. One ticket, one diff, easy to throw away.
 3. **explore** — reads dbt's manifest and works out which tables you probably mean, and what feeds them. So the model doesn't invent a `ref()`.
 4. **work** — the agent edits files and runs dbt. Risky calls stop and ask you.
-5. **verify** — we run `dbt build` ourselves. The model's opinion of its own work is ignored.
-6. **PR** — with `--pr`, verified work gets pushed and a pull request opened.
+5. **verify** — we run `dbt build` ourselves, plus whatever linters you declared. The model's opinion of its own work is ignored.
+6. **review** — with `--review`, a second agent reads the whole diff and can send it back for another pass.
+7. **PR** — with `--pr`, verified and approved work gets pushed and a pull request opened.
 
 Everything lands in a SQLite journal: `uv run aha runs`.
 
@@ -119,6 +120,51 @@ Safety is code, not prompt wishes:
 
 Unattended means naming the calls up front (`--allow dbt_build`), not turning
 the gate off. Plus hard per-run limits on cost and steps.
+
+## Your checks, not just ours
+
+`dbt build` says the code runs. It doesn't say it would pass review here. Drop an
+`aha.toml` in the project and the run has to clear your linters too:
+
+```toml
+[checks]
+sqlfluff = "sqlfluff lint models --dialect duckdb"
+yamllint = "yamllint models"
+```
+
+No config? If the project has a `.sqlfluff` or `.yamllint` and the tool is on
+PATH, we run it anyway. One-offs go on the command line: `--check "dbt test
+--select state:modified"`, repeatable.
+
+A failing check fails the run, even when the agent thinks it finished — that's
+the point. The list is read **before** the agent starts and pinned, because the
+config lives in the workspace the agent can write to, and a run must not get to
+pick the commands that judge it.
+
+## A second pair of eyes
+
+```bash
+uv run aha run "..." --review
+```
+
+A reviewing agent reads the **whole diff**, the checks output, and any file it
+wants — read-only, no tools that change anything — and returns a typed verdict:
+approved, or a list of specific changes. If it asks for changes, those go
+straight back to the implementing agent as its next instruction, and the work
+gets verified and reviewed again.
+
+Bounded to one round by default (`review_rounds`): two agents can disagree
+forever, and a reviewer that can't be satisfied is one a person has to overrule
+anyway. With `--pr`, unapproved work doesn't get announced as ready — the branch
+is still there, and the journal says why.
+
+It's a reviewer, not a gate. The person still decides.
+
+## Big tasks get broken down
+
+When triage judges a request large, the agent is told to write a task list
+before it edits anything, and the journal records if it didn't. A plan is what a
+reviewer reads to see whether anything was dropped halfway through.
 
 ## Watching it work
 
