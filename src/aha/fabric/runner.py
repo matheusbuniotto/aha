@@ -7,7 +7,7 @@ or how it is judged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -16,9 +16,11 @@ from pydantic_ai.models import Model
 from . import pack as packs
 from .approvals import Approver, default_approver
 from .assembly import build_agent, usage_limits
+from .branching import Branch, ensure_branch
 from .classify import Classification, classify
 from .journal import Journal
-from .pack import Verification
+from .pack import Pack, Verification
+from .progress import NullReporter, Reporter
 from .spec import TaskSpec
 
 DEFAULT_JOURNAL = Path('.aha/journal.db')
@@ -35,6 +37,8 @@ class RunOutcome:
     verification: Verification
     usd: float
     status: str
+    branch: str | None = None
+    """The branch the work landed on, or None when the workspace is not a repo."""
 
     @property
     def ok(self) -> bool:
@@ -52,6 +56,9 @@ class LocalRunner:
 
     approver: Approver | None = None
     journal_path: Path = DEFAULT_JOURNAL
+    reporter: Reporter = field(default_factory=NullReporter)
+    """Where progress goes while the run is still happening."""
+
     model_override: Model | str | None = None
     """Set by tests to run without a provider key."""
 
@@ -67,26 +74,36 @@ class LocalRunner:
             confidence=verdict.confidence,
             source=verdict.source,
         )
+        self.reporter.phase(
+            'task',
+            f'{journal.run_id} · {verdict.kind} ({verdict.confidence:.2f} via {verdict.source})',
+        )
 
         approver = self.approver or default_approver(spec.autonomy)
 
-        status, output, usd = 'succeeded', '', 0.0
+        status, output, usd, branch = 'succeeded', '', 0.0, None
         try:
+            branch = self._branch(spec, journal)
+            prompt = self._brief(spec, pack, journal)
             agent = build_agent(
                 spec,
                 pack,
                 approver=approver,
                 journal=journal,
+                reporter=self.reporter,
                 steps_db=self.journal_path.with_name('steps.db'),
             )
+            self.reporter.phase('working', spec.goal)
             with agent.override(model=self.model_override) if self.model_override else _nothing():
-                result = await agent.run(spec.goal, usage_limits=usage_limits(spec))
+                result = await agent.run(prompt, usage_limits=usage_limits(spec))
             output = str(result.output)
             usd = _cost_of(result)
         except Exception as exc:
             status, output = 'failed', f'{type(exc).__name__}: {exc}'
             journal.record('run_error', error=output)
+            self.reporter.phase('error', output)
 
+        self.reporter.phase('verify', 'checking the work independently of what the model claims')
         verification = pack.verify(spec)
         journal.record('verified', passed=verification.passed, detail=verification.detail)
         journal.finish(status=status, usd=usd, detail=verification.detail)
@@ -99,7 +116,32 @@ class LocalRunner:
             verification=verification,
             usd=usd,
             status=status,
+            branch=branch.name if branch else None,
         )
+
+    def _branch(self, spec: TaskSpec, journal: Journal) -> Branch | None:
+        """Isolate the run on its own branch, so one ticket is one reviewable diff."""
+        if not spec.branch:
+            return None
+        branch = ensure_branch(spec.resolved_workspace, spec.task_id or journal.run_id)
+        if branch is None:
+            self.reporter.phase('branch', 'workspace is not a git repository; changes are not isolated')
+            journal.record('branch_skipped', reason='not a git repository')
+            return None
+        journal.set_branch(branch.name)
+        journal.record('branched', branch=branch.name, base=branch.base, created=branch.created)
+        verb = 'created from' if branch.created else 'reusing, based on'
+        self.reporter.phase('branch', f'{branch.name} ({verb} {branch.base})')
+        return branch
+
+    def _brief(self, spec: TaskSpec, pack: Pack, journal: Journal) -> str:
+        """Survey the workspace first, and hand the agent the goal with what we found."""
+        brief = pack.explore(spec).strip()
+        if not brief:
+            return spec.goal
+        journal.record('explored', brief=brief)
+        self.reporter.phase('explore', brief)
+        return f'{spec.goal}\n\n<survey>\n{brief}\n</survey>'
 
 
 class _nothing:

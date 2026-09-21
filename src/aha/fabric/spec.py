@@ -103,6 +103,16 @@ class TaskSpec:
     kind: str = 'unclassified'
     """Filled in by the classifier; packs use it to specialise instructions."""
 
+    task_id: str | None = None
+    """The ticket this run belongs to, such as `TASK-12`. Names the branch.
+
+    Left unset, the run id stands in, so work is still isolated and still
+    traceable back to a journal entry.
+    """
+
+    branch: bool = True
+    """Whether to isolate the run on its own git branch."""
+
     autonomy: Autonomy = Autonomy.supervised
     model: str = 'anthropic:claude-sonnet-4-6'
     policy: Policy = field(default_factory=Policy)

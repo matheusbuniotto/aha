@@ -18,9 +18,11 @@ from pydantic_ai.capabilities import AgentCapability, Capability
 
 from ..fabric.pack import TaskKind, Verification, register
 from ..fabric.spec import Policy, Risk, TaskSpec
+from .explore import Manifest, describe, survey
 
 MAX_OUTPUT_CHARS = 20_000
 SKILLS_DIR = Path(__file__).parent / 'skills' / 'dbt'
+MANIFEST = Path('target') / 'manifest.json'
 
 KINDS = (
     TaskKind(
@@ -114,18 +116,24 @@ Document the models.
 
 
 def default_policy() -> Policy:
-    """dbt's blast radius: warehouse writes are high risk, file edits are routine."""
+    """dbt's blast radius: warehouse writes are high risk, file edits are routine.
+
+    No shell at all. Analytics work needs dbt verbs, SQL, and file edits, and a
+    model that reaches for `grep` instead burns turns on refusals -- the denial
+    is correct, but the cheaper answer is not to offer the door.
+    """
     return Policy(
-        allowed_commands=('git',),
+        allowed_commands=(),
         risks={
             'write_file': Risk.mutate,
             'edit_file': Risk.mutate,
             'create_directory': Risk.mutate,
-            'run_command': Risk.mutate,
             'dbt_run': Risk.high,
             'dbt_build': Risk.high,
             'dbt_seed': Risk.high,
             'query_sql': Risk.read,
+            'find_tables': Risk.read,
+            'lineage': Risk.read,
             'dbt_test': Risk.read,
             'dbt_compile': Risk.read,
             'dbt_parse': Risk.read,
@@ -177,7 +185,11 @@ class DbtPack:
         body = INSTRUCTIONS.get(spec.kind, INSTRUCTIONS['model_build'])
         return (
             f'You are an analytics engineer working in a dbt project at the workspace root.\n'
-            f'The dbt target is `{target}`.\n\n{body}'
+            f'The dbt target is `{target}`.\n\n'
+            'A survey of the project comes with the request. Before you name a table, '
+            'confirm it exists: `find_tables` searches names, descriptions, and columns, '
+            'and `lineage` shows what a model feeds. Never invent a `ref()`.\n\n'
+            f'{body}'
         )
 
     def capabilities(self, spec: TaskSpec) -> list[AgentCapability[None]]:
@@ -217,14 +229,46 @@ class DbtPack:
             """Run a read-only SQL query against the project's DuckDB warehouse."""
             return _query_duckdb(project, sql, limit)
 
+        def find_tables(term: str) -> str:
+            """Find models, seeds, and sources whose name, columns, or description mention `term`."""
+            manifest = _manifest(project)
+            if manifest is None:
+                return 'no manifest yet; run dbt_parse first'
+            return describe(manifest, manifest.find(term))
+
+        def lineage(name: str) -> str:
+            """Show what a model or source depends on, and what would break if you change it."""
+            manifest = _manifest(project)
+            if manifest is None:
+                return 'no manifest yet; run dbt_parse first'
+            matches = [r for r in manifest.resources.values() if r.name == name] or manifest.find(name)
+            return describe(manifest, matches[:1])
+
         return [
             Capability(
                 id='dbt',
                 description='Build, test, and inspect a dbt project.',
                 instructions=self.instructions(spec),
-                tools=[dbt_ls, dbt_parse, dbt_compile, dbt_build, dbt_test, dbt_seed, query_sql],
+                tools=[
+                    dbt_ls,
+                    dbt_parse,
+                    dbt_compile,
+                    dbt_build,
+                    dbt_test,
+                    dbt_seed,
+                    query_sql,
+                    find_tables,
+                    lineage,
+                ],
             )
         ]
+
+    def explore(self, spec: TaskSpec) -> str:
+        """Survey the project once, so the agent starts from real table names."""
+        manifest = _manifest(spec.resolved_workspace)
+        if manifest is None:
+            return ''
+        return survey(manifest, spec.goal)
 
     def skills(self) -> Path | None:
         return SKILLS_DIR if SKILLS_DIR.is_dir() else None
@@ -239,6 +283,14 @@ class DbtPack:
         output = _dbt(project, 'build')
         passed = output.startswith('exit=0')
         return Verification(passed=passed, detail=_tail(output))
+
+
+def _manifest(project: Path) -> Manifest | None:
+    """Load the manifest, parsing the project first if dbt has not built one yet."""
+    path = project / MANIFEST
+    if not path.exists():
+        _dbt(project, 'parse')
+    return Manifest.load(path)
 
 
 def _tail(output: str, lines: int = 12) -> str:

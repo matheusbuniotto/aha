@@ -58,6 +58,16 @@ class Pack(Protocol):
         """
         ...
 
+    def explore(self, spec: TaskSpec) -> str:
+        """A deterministic survey of what the task will touch, run before the agent.
+
+        Cheap, read-only reconnaissance the fabric can do without spending model
+        turns: which tables exist, which the request probably means, what feeds
+        them. Returns the briefing, or an empty string when there is nothing
+        useful to say.
+        """
+        ...
+
     def skills(self) -> Path | None:
         """A directory of portable `SKILL.md` packages, loaded on demand."""
         ...

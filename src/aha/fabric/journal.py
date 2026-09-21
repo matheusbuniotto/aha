@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS runs (
     ended_at    TEXT,
     status      TEXT NOT NULL DEFAULT 'running',
     usd         REAL NOT NULL DEFAULT 0.0,
-    detail      TEXT
+    detail      TEXT,
+    branch      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -41,6 +42,14 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS events_run_idx ON events(run_id);
 """
+
+
+def _add_missing_columns(db: sqlite3.Connection) -> None:
+    """Bring a journal written by an older version up to the current schema."""
+    present = {row[1] for row in db.execute('PRAGMA table_info(runs)')}
+    for column, kind in (('branch', 'TEXT'),):
+        if column not in present:
+            db.execute(f'ALTER TABLE runs ADD COLUMN {column} {kind}')
 
 
 def _now() -> str:
@@ -61,6 +70,7 @@ class Journal:
         run_id = f'{spec.name}-{uuid.uuid4().hex[:8]}'
         with closing(sqlite3.connect(path)) as db:
             db.executescript(SCHEMA)
+            _add_missing_columns(db)
             db.execute(
                 'INSERT INTO runs (id, task, pack, kind, autonomy, goal, workspace, started_at)'
                 ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -77,6 +87,12 @@ class Journal:
             )
             db.commit()
         return cls(path=path, run_id=run_id)
+
+    def set_branch(self, branch: str) -> None:
+        """Record where this run's changes live, so a reviewer can find the diff."""
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute('UPDATE runs SET branch = ? WHERE id = ?', (branch, self.run_id))
+            db.commit()
 
     def record(self, event: str, /, **payload: Any) -> None:
         """Append one event. `event` is positional so payload keys never collide."""

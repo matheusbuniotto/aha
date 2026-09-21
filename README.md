@@ -25,8 +25,9 @@ uv sync --group dbt
 uv run aha packs                              # what the agent knows how to be asked for
 uv run aha doctor                             # model routing and provider credentials
 uv run aha classify "why is revenue wrong?"   # how a request would be routed, for free
+uv run aha explore "why is revenue wrong?"    # the tables it would start from, for free
 uv run aha run "add a staging model for raw orders with tests" \
-    --workspace examples/jaffle --pack dbt --autonomy supervised
+    --workspace examples/jaffle --pack dbt --autonomy supervised --task-id TASK-12
 uv run aha runs                               # the audit trail
 ```
 
@@ -72,12 +73,16 @@ set and lands as a failed run in the journal rather than a traceback.
 ## How it fits together
 
 ```
-TaskSpec ──▶ classify ──▶ Pack ──▶ build_agent ──▶ Runner ──▶ verify
-   │                       │           │                        │
- policy                tools +     + filesystem, shell,     independent
- autonomy            house style     approval gate,         check, in code
-                                     compaction, steps
+TaskSpec ─▶ classify ─▶ branch ─▶ explore ─▶ build_agent ─▶ run ─▶ verify
+   │                      │          │           │           │        │
+ policy                aha/TASK-  tables +    tools, rails, progress  independent
+ autonomy                 ID       lineage    approval gate  to the   check,
+                                                             console  in code
 ```
+
+Three of those steps happen before the model is asked anything: the task is
+classified, the workspace is put on its own branch, and the project is surveyed.
+All three are deterministic, free, and inspectable (`aha classify`, `aha explore`).
 
 ### The fabric (`aha.fabric`)
 
@@ -100,6 +105,7 @@ class Pack(Protocol):
     def policy(self) -> Policy: ...
     def instructions(self, spec: TaskSpec) -> str: ...
     def capabilities(self, spec: TaskSpec) -> list[AgentCapability[None]]: ...
+    def explore(self, spec: TaskSpec) -> str: ...
     def skills(self) -> Path | None: ...
     def verify(self, spec: TaskSpec) -> Verification: ...
 ```
@@ -107,6 +113,53 @@ class Pack(Protocol):
 A pack's instructions ride on the capability that owns its tools, so guidance
 and the tools it governs travel together and the fabric never has to know what
 either says.
+
+### Exploration
+
+A request names things in business language; the project names them
+`stg_jaffle__orders`. `Pack.explore` closes that gap once, before the run, from
+dbt's own manifest: which models, seeds, and sources exist, which of them the
+goal is probably about, and what feeds each one. The briefing goes into the
+prompt, and the same index is exposed as two read-only tools -- `find_tables`
+(name, description, or column) and `lineage` (what breaks if you change this).
+
+Letting the model discover all of that by grepping costs turns and invites
+invented `ref()`s. Doing it in code costs nothing and is inspectable:
+
+```bash
+uv run aha explore "the customers mart is showing duplicate rows" -w examples/jaffle
+```
+
+### Branching
+
+Every run switches the workspace onto `aha/<task-id>`, created from the current
+branch, and falls back to the run id when no ticket was named. One ticket is one
+branch is one reviewable diff, which is what makes unattended work delegatable;
+it is also the real undo button, since the approval gate decides what may happen
+and git decides how cheaply it can be unhappened. The runner does this, not the
+agent -- `.git/**` stays protected. A workspace that is not a repository still
+runs, and the journal records that it was not isolated.
+
+### Watching a run
+
+A run that prints nothing until it finishes is indistinguishable from one that
+has hung. Every tool call, result headline, and line of the model's own narration
+is printed as it happens, from the same event stream the journal is built from,
+so what you watch and what is recorded cannot drift apart:
+
+```
+    task task-33898512 · analysis (0.95 via rules)
+  branch aha/TASK-43 (created from main)
+ explore seeds (2): raw_customers, raw_orders
+         ...
+ working count how many customers are in the warehouse
+0:04 -> read_file path=models/staging/stg_customers.sql
+0:06 <- find_tables: raw_customers (seed) seeds/raw_customers.csv [+7 lines]
+0:08 .. Grain is one row per customer. Now let me count.
+```
+
+`Reporter` is a protocol, so a cloud runner pushes the same lines to CloudWatch
+or a Slack thread. `--quiet` turns it off; library use is silent by default.
 
 ### Skills
 
@@ -141,8 +194,9 @@ system prompt.
   Credentials, `profiles.yml`, `.env`, and `.git` are unreadable whatever the
   model asks for.
 - **No free shell.** dbt is invoked with a fixed argument vector, never through
-  a shell. The agent picks verbs and selectors, not command lines. Any remaining
-  shell access is an explicit executable allowlist.
+  a shell. The agent picks verbs and selectors, not command lines. The dbt pack
+  grants no shell at all; where a pack does grant one (`generic`), it is an
+  explicit executable allowlist.
 - **Read-only analysis.** `query_sql` opens DuckDB read-only and refuses
   statements that would write.
 - **Risk bands.** Every tool is `read`, `mutate`, or `high`. Reads are free,
@@ -198,6 +252,8 @@ journal and step store off local SQLite.
 make install          # every dependency group
 make demo             # unattended run on a throwaway copy of examples/jaffle
 make demo-supervised  # the same run, approving each risky call yourself
+make explore          # the tables and lineage a run would start from
+make diff             # what the last demo changed, on its branch
 make runs             # what the last demo did
 make journal          # that run broken down by event kind
 make check            # lint and test, what CI would run
@@ -209,7 +265,7 @@ make skills           # the dbt skills and when each fires
 `demo` takes a `GOAL`, so trying a new kind of task is one line:
 
 ```bash
-make demo GOAL="add accepted_values tests to the status column"
+make demo GOAL="add accepted_values tests to the status column" TASK=TASK-42
 ```
 
 ## Tests

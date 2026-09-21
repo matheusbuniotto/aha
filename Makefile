@@ -8,10 +8,11 @@ JOURNAL  ?= .aha/journal.db
 GOAL     ?= add a staging model for raw orders, with a uniqueness test on its key
 WORKSPACE?= $(DEMO)
 ALLOW    ?= --allow dbt_build --allow dbt_seed
+TASK     ?= TASK-1
 
 .DEFAULT_GOAL := help
 .PHONY: help install check test test-unit lint format doctor packs skills classify \
-        demo demo-supervised shell runs journal clean build reset-demo
+        demo demo-supervised explore diff shell runs journal clean build reset-demo
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -49,19 +50,29 @@ skills: ## List the dbt skills and when each one fires
 classify: ## Show how a request routes, no model call. Override with GOAL="..."
 	$(DBT) aha classify "$(GOAL)"
 
+explore: ## Show the table candidates and lineage a run would start from
+	$(DBT) aha explore "$(GOAL)" -w $(PROJECT)
+
 reset-demo: ## Copy the example dbt project to a clean scratch workspace
 	@rm -rf $(DEMO) && mkdir -p $(DEMO)
 	@cd $(PROJECT) && git ls-files | while read -r f; do \
 		mkdir -p "$(DEMO)/$$(dirname "$$f")"; cp "$$f" "$(DEMO)/$$f"; done
-	@echo "clean project at $(DEMO)"
+	@printf '.aha/\n.user.yml\ntarget/\nlogs/\n*.duckdb\n' > $(DEMO)/.gitignore
+	@git -C $(DEMO) init -q --initial-branch main
+	@git -C $(DEMO) add -A && git -C $(DEMO) -c user.email=demo@local -c user.name=demo \
+		commit -qm "jaffle before the agent"
+	@echo "clean project at $(DEMO), on main"
 
-demo: reset-demo ## Unattended run on a scratch project. Override GOAL="..."
-	PYDANTIC_AI_NO_BANNER=1 $(DBT) aha run "$(GOAL)" \
+demo: reset-demo ## Unattended run on a scratch project. Override GOAL="..." TASK=...
+	PYDANTIC_AI_NO_BANNER=1 $(DBT) aha run "$(GOAL)" -t $(TASK) \
 		-w $(WORKSPACE) -a autonomous $(ALLOW) --journal $(DEMO)/.aha/journal.db
 
 demo-supervised: reset-demo ## Same run, approving each risky call at the terminal
-	PYDANTIC_AI_NO_BANNER=1 $(DBT) aha run "$(GOAL)" \
+	PYDANTIC_AI_NO_BANNER=1 $(DBT) aha run "$(GOAL)" -t $(TASK) \
 		-w $(WORKSPACE) -a supervised --journal $(DEMO)/.aha/journal.db
+
+diff: ## Review what the last demo run changed, on its own branch
+	@git -C $(DEMO) log --oneline -1 && git -C $(DEMO) status --short && git -C $(DEMO) diff main
 
 runs: ## List recent runs from the demo journal
 	$(DBT) aha runs --journal $(DEMO)/.aha/journal.db

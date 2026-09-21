@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import packs  # noqa: F401 - registers the built-in packs
-from .fabric import Autonomy, LocalRunner, PreAuthorized, TaskSpec, get, names
+from .fabric import Autonomy, ConsoleReporter, LocalRunner, NullReporter, PreAuthorized, TaskSpec, get, names
 from .fabric.classify import classify
 from .fabric.models import ENDPOINTS, describe
 from .fabric.runner import DEFAULT_JOURNAL
@@ -43,6 +43,12 @@ def run(
         typer.Option('--model', '-m', help='Provider model, or opencode-go/<id>, or openai-compatible/<id>.'),
     ] = DEFAULT_MODEL,
     name: Annotated[str, typer.Option('--name', help='Slug recorded in the journal.')] = 'task',
+    task_id: Annotated[
+        str | None,
+        typer.Option('--task-id', '-t', help='Ticket this run belongs to, such as TASK-12. Names the branch.'),
+    ] = None,
+    branch: Annotated[bool, typer.Option('--branch/--no-branch', help='Isolate the run on its own git branch.')] = True,
+    quiet: Annotated[bool, typer.Option('--quiet', '-q', help='Only print the final report.')] = False,
     journal: Annotated[Path, typer.Option('--journal', help='Where the audit trail is kept.')] = DEFAULT_JOURNAL,
     max_usd: Annotated[float, typer.Option('--max-usd', help='Hard spend ceiling for this run.')] = 2.0,
     allow: Annotated[
@@ -57,6 +63,8 @@ def run(
         goal=goal,
         workspace=workspace,
         pack=pack,
+        task_id=task_id,
+        branch=branch,
         autonomy=autonomy,
         model=model,
         policy=_with_ceiling(domain.policy(), max_usd),
@@ -69,7 +77,9 @@ def run(
     if allow:
         console.print(f'pre-authorised [magenta]{", ".join(allow)}[/]\n')
 
-    outcome = asyncio.run(LocalRunner(approver=approver, journal_path=journal).run(spec))
+    reporter = NullReporter() if quiet else ConsoleReporter(console=console)
+    runner = LocalRunner(approver=approver, journal_path=journal, reporter=reporter)
+    outcome = asyncio.run(runner.run(spec))
     _report(outcome)
     raise typer.Exit(0 if outcome.ok else 1)
 
@@ -93,6 +103,18 @@ def classify_goal(
     verdict = classify(goal, get(pack).kinds())
     flag = ' [yellow](uncertain)[/]' if verdict.uncertain else ''
     console.print(f'{verdict.kind} · {verdict.confidence:.2f} via {verdict.source}{flag}')
+
+
+@app.command('explore')
+def explore(
+    goal: Annotated[str, typer.Argument(help='What you want done, in plain language.')],
+    workspace: Annotated[Path, typer.Option('--workspace', '-w')] = Path('.'),
+    pack: Annotated[str, typer.Option('--pack', '-p')] = 'dbt',
+) -> None:
+    """Show the survey a run would start from: table candidates and their lineage."""
+    spec = TaskSpec(name='explore', goal=goal, workspace=workspace, pack=pack)
+    brief = get(pack).explore(spec).strip()
+    console.print(brief or f'[dim]the {pack} pack has nothing to survey here[/]')
 
 
 @app.command('doctor')
@@ -128,16 +150,17 @@ def list_runs(
         return
     with closing(sqlite3.connect(journal)) as db:
         rows = db.execute(
-            'SELECT id, task, pack, kind, autonomy, status, usd, started_at FROM runs ORDER BY started_at DESC LIMIT ?',
+            'SELECT id, kind, branch, autonomy, status, usd, started_at'
+            ' FROM runs ORDER BY started_at DESC LIMIT ?',
             (limit,),
         ).fetchall()
 
     table = Table(box=None, pad_edge=False)
-    for column in ('run', 'task', 'pack', 'kind', 'autonomy', 'status', 'usd', 'started'):
+    for column in ('run', 'kind', 'branch', 'autonomy', 'status', 'usd', 'started'):
         table.add_column(column)
-    for run_id, task, pack, kind, autonomy, status, usd, started in rows:
+    for run_id, kind, branch, autonomy, status, usd, started in rows:
         colour = 'green' if status == 'succeeded' else 'red'
-        table.add_row(run_id, task, pack, kind, autonomy, f'[{colour}]{status}[/]', f'{usd:.4f}', started)
+        table.add_row(run_id, kind, branch or '-', autonomy, f'[{colour}]{status}[/]', f'{usd:.4f}', started)
     console.print(table)
 
 
@@ -152,6 +175,8 @@ def _report(outcome) -> None:
     console.print(f'\n[dim]run[/] {outcome.run_id}')
     console.print(f'[dim]kind[/] {verdict.kind} ({verdict.confidence:.2f} via {verdict.source})')
     console.print(f'[dim]status[/] {outcome.status} · [dim]cost[/] ${outcome.usd:.4f}')
+    if outcome.branch:
+        console.print(f'[dim]branch[/] {outcome.branch}')
 
     mark = '[green]verified[/]' if outcome.verification.passed else '[red]not verified[/]'
     console.print(f'[dim]check[/] {mark}')

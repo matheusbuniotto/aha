@@ -71,6 +71,10 @@ class GenericPack:
         """No domain tools -- only house style, which still travels as a capability."""
         return [Capability(id='generic', instructions=self.instructions(spec))]
 
+    def explore(self, spec: TaskSpec) -> str:
+        """Nothing to survey: with no domain model, the filesystem is the map."""
+        return ''
+
     def skills(self) -> Path | None:
         return None
 
