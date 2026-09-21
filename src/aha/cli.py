@@ -150,8 +150,7 @@ def list_runs(
         return
     with closing(sqlite3.connect(journal)) as db:
         rows = db.execute(
-            'SELECT id, kind, branch, autonomy, status, usd, started_at'
-            ' FROM runs ORDER BY started_at DESC LIMIT ?',
+            'SELECT id, kind, branch, autonomy, status, usd, started_at FROM runs ORDER BY started_at DESC LIMIT ?',
             (limit,),
         ).fetchall()
 
